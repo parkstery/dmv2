@@ -1,0 +1,7 @@
+{
+  "name": "Advanced Dual Map Viewer",
+  "description": "A sophisticated dual-pane map application synchronizing Google, Kakao, and Naver maps with integrated GIS tools, roadview, and measurement features.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
