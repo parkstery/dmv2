@@ -435,8 +435,7 @@ const MapPane: React.FC<MapPaneProps> = ({
         let moveLine: any = null;
         let distanceOverlay: any = null;
         
-        // Use a local array to track the *current* measurement session's objects
-        // so we can delete ONLY these when the "X" button is clicked.
+        // Track current session objects for "X" button
         let currentSessionObjects: any[] = [];
 
         const handleClick = (e: any) => {
@@ -445,7 +444,7 @@ const MapPane: React.FC<MapPaneProps> = ({
             if (!isDrawing) {
                 // Start Drawing
                 isDrawing = true;
-                currentSessionObjects = []; // Start new session
+                currentSessionObjects = []; 
                 
                 // Fixed line
                 drawingLine = new window.kakao.maps.Polyline({
@@ -457,7 +456,7 @@ const MapPane: React.FC<MapPaneProps> = ({
                     strokeStyle: 'solid'
                 });
                 
-                // Moving line
+                // Moving line (rubber-band)
                 moveLine = new window.kakao.maps.Polyline({
                     map: map,
                     path: [],
@@ -486,7 +485,6 @@ const MapPane: React.FC<MapPaneProps> = ({
                 });
                 
                 currentSessionObjects.push(drawingLine, moveLine, distanceOverlay, circle);
-                // Also push to global ref for "Clear All" functionality
                 kakaoDrawingRef.current.overlays.push(drawingLine, moveLine, distanceOverlay, circle);
                 
             } else {
@@ -550,7 +548,6 @@ const MapPane: React.FC<MapPaneProps> = ({
              const totalDist = Math.round(drawingLine.getLength());
              const lastPos = path[path.length-1];
 
-             // Calculations
              const walkTime = Math.floor(totalDist / 67); 
              const bycicleTime = Math.floor(totalDist / 227); 
              const walkHour = Math.floor(walkTime / 60);
@@ -561,7 +558,6 @@ const MapPane: React.FC<MapPaneProps> = ({
              const walkText = walkHour > 0 ? `${walkHour}시간 ${walkMin}분` : `${walkMin}분`;
              const bikeText = bikeHour > 0 ? `${bikeHour}시간 ${bikeMin}분` : `${bikeMin}분`;
 
-             // Create Summary Overlay with Close Button
              const content = document.createElement('div');
              content.style.cssText = 'background:white; border:1px solid #333; padding:10px; border-radius:5px; font-size:12px; min-width:140px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); font-family: sans-serif; position: relative;';
              content.innerHTML = `
@@ -583,19 +579,17 @@ const MapPane: React.FC<MapPaneProps> = ({
                  zIndex: 200
              });
 
-             // Add Close Logic
+             // Close Button Logic
              const closeBtn = content.querySelector('.close-btn');
              if (closeBtn) {
                  closeBtn.addEventListener('click', (ev) => {
-                     ev.stopPropagation(); // Prevent map click
-                     endOverlay.setMap(null);
-                     // Remove all objects related to this measurement
+                     ev.stopPropagation(); 
                      currentSessionObjects.forEach(obj => obj.setMap(null));
                  });
              }
              
-             // Push endOverlay to storage
              kakaoDrawingRef.current.overlays.push(endOverlay);
+             currentSessionObjects.push(endOverlay);
 
              // Reset local state
              isDrawing = false;
@@ -614,13 +608,13 @@ const MapPane: React.FC<MapPaneProps> = ({
             () => window.kakao.maps.event.removeListener(map, 'rightclick', handleRightClick)
         );
     } 
-    // 2. Area Measurement
+    // 2. Area Measurement (Enhanced)
     else if (gisMode === GISMode.AREA) {
         map.setCursor('default');
         
         let isDrawing = false;
-        let drawingPolygon: any = null; // Committed polygon
-        let movePolygon: any = null;    // Dynamic polygon (preview)
+        let drawingPolygon: any = null; // Committed points
+        let movePolygon: any = null;    // Dynamic preview
         let areaOverlay: any = null;    // Floating info
         let currentSessionObjects: any[] = [];
 
@@ -628,12 +622,395 @@ const MapPane: React.FC<MapPaneProps> = ({
             const clickPosition = e.latLng;
 
             if (!isDrawing) {
-                // Start Drawing
+                // Start
                 isDrawing = true;
                 currentSessionObjects = [];
 
-                // Initialize Committed Polygon
                 drawingPolygon = new window.kakao.maps.Polygon({
                     map: map,
-                    path: [clickPosition], 
-                    strokeWeight
+                    path: [clickPosition],
+                    strokeWeight: 3,
+                    strokeColor: '#39f',
+                    strokeOpacity: 1,
+                    fillColor: '#A2D4EC',
+                    fillOpacity: 0.5,
+                    zIndex: 10
+                });
+
+                movePolygon = new window.kakao.maps.Polygon({
+                    map: map,
+                    path: [],
+                    strokeWeight: 3,
+                    strokeColor: '#39f',
+                    strokeOpacity: 0.7, // lighter border
+                    fillColor: '#A2D4EC',
+                    fillOpacity: 0.4,   // lighter fill
+                    zIndex: 9
+                });
+
+                areaOverlay = new window.kakao.maps.CustomOverlay({
+                    map: map,
+                    content: '<div class="info"></div>',
+                    position: clickPosition,
+                    xAnchor: 0,
+                    yAnchor: 0,
+                    zIndex: 100
+                });
+
+                // Dot
+                const circle = new window.kakao.maps.CustomOverlay({
+                    map: map,
+                    position: clickPosition,
+                    content: '<div style="width:8px; height:8px; background:white; border:2px solid #39f; border-radius:50%;"></div>',
+                    zIndex: 50
+                });
+
+                currentSessionObjects.push(drawingPolygon, movePolygon, areaOverlay, circle);
+                kakaoDrawingRef.current.overlays.push(drawingPolygon, movePolygon, areaOverlay, circle);
+
+            } else {
+                // Add point
+                const path = drawingPolygon.getPath();
+                path.push(clickPosition);
+                drawingPolygon.setPath(path);
+
+                // Dot
+                const circle = new window.kakao.maps.CustomOverlay({
+                    map: map,
+                    position: clickPosition,
+                    content: '<div style="width:8px; height:8px; background:white; border:2px solid #39f; border-radius:50%;"></div>',
+                    zIndex: 50
+                });
+                
+                currentSessionObjects.push(circle);
+                kakaoDrawingRef.current.overlays.push(circle);
+            }
+        };
+
+        const handleMouseMove = (e: any) => {
+            if (!isDrawing) return;
+            const mousePosition = e.latLng;
+
+            // Rubber-band effect: path is confirmed points + mouse position
+            const path = drawingPolygon.getPath();
+            // Need a new array to prevent modifying original path by reference if API behaves that way
+            const newPath = path.map((p: any) => p); 
+            newPath.push(mousePosition);
+            
+            movePolygon.setPath(newPath);
+            movePolygon.setMap(map);
+
+            // Calculate area of the rubber-band polygon
+            const area = Math.round(movePolygon.getArea());
+            
+            const content = `<div style="background:white; border:1px solid #39f; padding:5px; border-radius:3px; font-size:12px; font-weight:bold; color:#39f; box-shadow:1px 1px 3px rgba(0,0,0,0.2);">
+                <span style="color:#333; font-weight:normal;">총면적</span> ${area}m²
+            </div>`;
+            
+            areaOverlay.setPosition(mousePosition);
+            areaOverlay.setContent(content);
+        };
+        
+        const handleRightClick = (e: any) => {
+            if (!isDrawing) return;
+            
+            // Cleanup temp
+            movePolygon.setMap(null);
+            areaOverlay.setMap(null);
+
+            const area = Math.round(drawingPolygon.getArea());
+            const path = drawingPolygon.getPath();
+            const lastPos = path[path.length-1];
+
+            const content = document.createElement('div');
+             content.style.cssText = 'background:white; border:1px solid #333; padding:10px; border-radius:5px; font-size:12px; min-width:120px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); font-family: sans-serif; position: relative;';
+             content.innerHTML = `
+                <div style="font-weight:bold; margin-bottom:5px; padding-right: 15px;">
+                    총면적 <span style="color:#39f; font-size:14px;">${area}</span>m²
+                </div>
+                <button class="close-btn" style="position: absolute; top: 2px; right: 2px; border: none; background: none; cursor: pointer; color: #999; font-size: 16px; font-weight: bold; line-height: 1;">×</button>
+             `;
+
+             const endOverlay = new window.kakao.maps.CustomOverlay({
+                map: map,
+                position: lastPos,
+                content: content,
+                yAnchor: 1.2,
+                zIndex: 200
+             });
+
+             // Close Button Logic
+             const closeBtn = content.querySelector('.close-btn');
+             if (closeBtn) {
+                 closeBtn.addEventListener('click', (ev) => {
+                     ev.stopPropagation(); 
+                     currentSessionObjects.forEach(obj => obj.setMap(null));
+                 });
+             }
+
+             currentSessionObjects.push(endOverlay);
+             kakaoDrawingRef.current.overlays.push(endOverlay);
+
+             // Reset
+             isDrawing = false;
+             drawingPolygon = null;
+             movePolygon = null;
+             areaOverlay = null;
+        };
+
+        window.kakao.maps.event.addListener(map, 'click', handleClick);
+        window.kakao.maps.event.addListener(map, 'mousemove', handleMouseMove);
+        window.kakao.maps.event.addListener(map, 'rightclick', handleRightClick);
+        
+        kakaoDrawingRef.current.listeners.push(
+            () => window.kakao.maps.event.removeListener(map, 'click', handleClick),
+            () => window.kakao.maps.event.removeListener(map, 'mousemove', handleMouseMove),
+            () => window.kakao.maps.event.removeListener(map, 'rightclick', handleRightClick)
+        );
+    }
+  }, [gisMode, config.type]);
+
+
+  // 5. Actions
+  const handleKakaoAction = useCallback((mode: GISMode) => {
+     if (config.type !== 'kakao' || !mapRef.current) return;
+     
+     // Reset previous Road View mode if active
+     if (gisMode === GISMode.ROADVIEW && mode !== GISMode.ROADVIEW) {
+         mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
+         if (kakaoGisRef.current.clickHandler) {
+             window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.clickHandler);
+             kakaoGisRef.current.clickHandler = null;
+         }
+         if (kakaoGisRef.current.walkerOverlay) {
+             kakaoGisRef.current.walkerOverlay.setMap(null);
+             kakaoGisRef.current.walkerOverlay = null;
+         }
+     }
+     mapRef.current.setCursor('default');
+
+     if (mode === GISMode.ROADVIEW) {
+       mapRef.current.addOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
+       mapRef.current.setCursor('crosshair');
+       
+       const clickHandler = (e: any) => {
+         const pos = e.latLng;
+         kakaoGisRef.current.rvClient.getNearestPanoId(pos, 50, (panoId: any) => {
+           if (panoId) {
+             setIsStreetViewActive(true); 
+             setTimeout(() => {
+               if (roadviewRef.current) {
+                 const rv = new window.kakao.maps.Roadview(roadviewRef.current);
+                 rv.setPanoId(panoId, pos);
+                 kakaoGisRef.current.rv = rv;
+
+                 // Create Walker Overlay on Mini-Map
+                 if (!kakaoGisRef.current.walkerOverlay) {
+                     const content = document.createElement('div');
+                     content.style.width = '26px';
+                     content.style.height = '46px';
+                     content.style.background = 'url(https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/walker.png) no-repeat 0 0';
+                     content.style.backgroundSize = '26px 46px';
+                     
+                     kakaoGisRef.current.walkerOverlay = new window.kakao.maps.CustomOverlay({
+                         position: pos,
+                         content: content,
+                         map: mapRef.current,
+                         yAnchor: 1
+                     });
+                 }
+
+                 window.kakao.maps.event.addListener(rv, 'position_changed', () => {
+                    const rvPos = rv.getPosition();
+                    isDragging.current = true; 
+                    
+                    // Sync Map Center
+                    onStateChange({ lat: rvPos.getLat(), lng: rvPos.getLng(), zoom: mapRef.current.getLevel() });
+                    mapRef.current.setCenter(rvPos);
+                    
+                    // Sync Walker
+                    if (kakaoGisRef.current.walkerOverlay) {
+                        kakaoGisRef.current.walkerOverlay.setPosition(rvPos);
+                    }
+
+                    setTimeout(() => isDragging.current = false, 200);
+                 });
+
+                 // Rotate Walker on Viewpoint Change
+                 window.kakao.maps.event.addListener(rv, 'viewpoint_changed', () => {
+                     const viewpoint = rv.getViewpoint();
+                     if (kakaoGisRef.current.walkerOverlay) {
+                         const content = kakaoGisRef.current.walkerOverlay.getContent();
+                         content.style.transform = `rotate(${viewpoint.pan}deg)`;
+                     }
+                 });
+               }
+             }, 300);
+           }
+         });
+       };
+       
+       kakaoGisRef.current.clickHandler = clickHandler;
+       window.kakao.maps.event.addListener(mapRef.current, 'click', clickHandler);
+     }
+
+     setGisMode(mode);
+  }, [config.type, gisMode]);
+
+  const toggleKakaoCadastral = useCallback(() => {
+    if (config.type !== 'kakao' || !mapRef.current) return;
+    const isCadastral = kakaoGisRef.current.roadviewLayer;
+    if (isCadastral) mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.USE_DISTRICT);
+    else mapRef.current.addOverlayMapTypeId(window.kakao.maps.MapTypeId.USE_DISTRICT);
+    kakaoGisRef.current.roadviewLayer = !isCadastral;
+  }, [config.type]);
+
+  const toggleNaverStreetLayer = useCallback(() => {
+    if (!mapRef.current || !naverStreetLayerRef.current) return;
+    
+    // Toggle State and Ref for Sync
+    const nextState = !isNaverLayerOn;
+    setIsNaverLayerOn(nextState);
+
+    if (nextState) {
+        naverStreetLayerRef.current.setMap(mapRef.current);
+        mapRef.current.setCursor('crosshair');
+    } else {
+        naverStreetLayerRef.current.setMap(null);
+        mapRef.current.setCursor('default');
+    }
+  }, [isNaverLayerOn]);
+
+  const clearKakaoDrawingResources = () => {
+      kakaoDrawingRef.current.overlays.forEach(o => o.setMap(null));
+      kakaoDrawingRef.current.overlays = [];
+      kakaoDrawingRef.current.listeners.forEach(fn => fn());
+      kakaoDrawingRef.current.listeners = [];
+  };
+
+  const closeStreetView = () => {
+    setIsStreetViewActive(false);
+    if (config.type === 'google') {
+      if (googlePanoInstanceRef.current) googlePanoInstanceRef.current.setVisible(false);
+      if (googleCoverageLayerRef.current) googleCoverageLayerRef.current.setMap(null);
+    }
+    // Fix: Clean up Kakao Roadview overlays/handlers
+    if (config.type === 'kakao' && mapRef.current) {
+      if (gisMode === GISMode.ROADVIEW) {
+          mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
+          if (kakaoGisRef.current.clickHandler) {
+              window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.clickHandler);
+              kakaoGisRef.current.clickHandler = null;
+          }
+          if (kakaoGisRef.current.walkerOverlay) {
+              kakaoGisRef.current.walkerOverlay.setMap(null);
+              kakaoGisRef.current.walkerOverlay = null;
+          }
+          mapRef.current.setCursor('default');
+          setGisMode(GISMode.DEFAULT);
+      }
+    }
+    // Fix: Clean up Naver
+    if (config.type === 'naver') {
+        if (naverMarkerRef.current) {
+            naverMarkerRef.current.setMap(null);
+            naverMarkerRef.current = null;
+        }
+    }
+  };
+
+  return (
+    <div className="w-full h-full relative group bg-gray-50 overflow-hidden">
+      {/* 1. Main Map / Mini Map Container */}
+      <div 
+        ref={containerRef} 
+        className={`transition-all duration-300 ease-in-out bg-white
+          ${isStreetViewActive 
+            ? 'absolute bottom-3 left-3 w-[240px] h-[240px] z-[100] border-4 border-white shadow-2xl rounded-lg overflow-hidden' 
+            : 'w-full h-full z-0'
+          }`}
+      />
+
+      {/* 2. Street View Containers */}
+      <div 
+        ref={googlePanoRef}
+        className={`absolute inset-0 bg-black transition-opacity duration-300 
+           ${config.type === 'google' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
+      />
+
+      <div 
+        ref={roadviewRef}
+        className={`absolute inset-0 bg-black transition-opacity duration-300 
+           ${config.type === 'kakao' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
+      />
+
+      <div 
+        ref={naverPanoContainerRef}
+        className={`absolute inset-0 bg-black transition-opacity duration-300 
+           ${config.type === 'naver' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
+      />
+
+      {/* 3. Close Button (Square Icon) */}
+      {isStreetViewActive && (
+        <button 
+          onClick={closeStreetView}
+          className="absolute top-4 right-4 z-[110] bg-white text-gray-800 w-10 h-10 flex items-center justify-center shadow-lg rounded-sm hover:bg-gray-100 transition-colors border border-gray-300"
+          title="거리뷰 닫기"
+        >
+          <svg viewBox="0 0 24 24" className="w-6 h-6 fill-current">
+            <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+          </svg>
+        </button>
+      )}
+
+      {/* 4. Loading & Controls */}
+      {!sdkLoaded && (
+         <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-[120] text-gray-500">
+            <span>Loading...</span>
+         </div>
+      )}
+
+      <button 
+        onClick={onToggleFullscreen}
+        className="absolute bottom-10 right-3 z-[110] bg-white p-1.5 rounded shadow border border-gray-300 hover:bg-gray-50 transition-colors"
+        title="전체화면"
+      >
+        {isFullscreen ? (
+          <svg viewBox="0 0 24 24" className="w-5 h-5 fill-current text-gray-700"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
+        ) : (
+          <svg viewBox="0 0 24 24" className="w-5 h-5 fill-current text-gray-700"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+        )}
+      </button>
+      
+      {/* Repositioned Naver Toggle Button: Left-Top */}
+      {config.type === 'naver' && (
+        <button 
+          onClick={toggleNaverStreetLayer} 
+          className={`absolute top-4 left-4 z-[110] px-2 py-1 rounded shadow border text-xs font-bold transition-colors ${isNaverLayerOn ? 'bg-blue-600 text-white border-blue-700' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+        >
+          {isNaverLayerOn ? '거리뷰 ON' : '거리뷰'}
+        </button>
+      )}
+      
+      {config.type === 'kakao' && (
+        <KakaoGisToolbar activeMode={gisMode} onAction={handleKakaoAction} onToggleCadastral={toggleKakaoCadastral} onClear={() => {
+              setGisMode(GISMode.DEFAULT);
+              if (mapRef.current) {
+                mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
+                mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.USE_DISTRICT);
+                mapRef.current.setCursor('default');
+              }
+              kakaoGisRef.current.roadviewLayer = false;
+              if (kakaoGisRef.current.walkerOverlay) {
+                  kakaoGisRef.current.walkerOverlay.setMap(null);
+                  kakaoGisRef.current.walkerOverlay = null;
+              }
+              clearKakaoDrawingResources();
+            }}
+        />
+      )}
+    </div>
+  );
+};
+
+export default MapPane;
