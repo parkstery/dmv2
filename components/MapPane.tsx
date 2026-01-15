@@ -49,6 +49,7 @@ const MapPane: React.FC<MapPaneProps> = ({
     walker: any;
     roadviewLayer: boolean;
     clickHandler?: any; 
+    addressClickListener?: any; // Added to manage cleanup
   }>({
     rv: null,
     rvClient: null,
@@ -236,7 +237,7 @@ const MapPane: React.FC<MapPaneProps> = ({
     kakaoGisRef.current.rvClient = new window.kakao.maps.RoadviewClient();
     
     setupMapListeners('kakao');
-    setupKakaoRightClick();
+    setupKakaoAddressClick();
   };
 
   const initNaverMap = () => {
@@ -252,16 +253,17 @@ const MapPane: React.FC<MapPaneProps> = ({
     setupMapListeners('naver');
     
     // ** Optimized Panorama Initialization **
-    // Create the panorama instance once and reuse it.
+    // 1. DOM이 준비되었는지 확인 후 파노라마 생성
     if (naverPanoContainerRef.current) {
-        // Clean container before creating
         naverPanoContainerRef.current.innerHTML = '';
         
         try {
+            // 초기 생성 시 현재 지도 좌표로 생성하되, visible 처리는 CSS로 제어
+            // pov, minScale, maxScale 등 필수 옵션 설정
             const pano = new window.naver.maps.Panorama(naverPanoContainerRef.current, {
                 position: new window.naver.maps.LatLng(globalState.lat, globalState.lng),
                 pov: { pan: -135, tilt: 29, fov: 100 },
-                visible: true, // It is visible in DOM but hidden by CSS z-index/opacity
+                visible: true,
                 zoomControl: true,
                 minScale: 0,
                 maxScale: 10
@@ -270,10 +272,13 @@ const MapPane: React.FC<MapPaneProps> = ({
 
             window.naver.maps.Event.addListener(pano, 'position_changed', () => {
                 const pos = pano.getPosition();
-                isDragging.current = true;
-                onStateChange({ lat: pos.lat(), lng: pos.lng(), zoom: mapRef.current.getZoom() });
-                mapRef.current.setCenter(pos);
-                setTimeout(() => isDragging.current = false, 200);
+                // 드래그 중이 아닐 때만 맵 동기화
+                if (!isDragging.current) {
+                  isDragging.current = true;
+                  onStateChange({ lat: pos.lat(), lng: pos.lng(), zoom: mapRef.current.getZoom() });
+                  mapRef.current.setCenter(pos);
+                  setTimeout(() => isDragging.current = false, 200);
+                }
             });
         } catch(e) {
             console.error("Naver Panorama Init Error", e);
@@ -282,18 +287,23 @@ const MapPane: React.FC<MapPaneProps> = ({
 
     // Add click listener with explicit ref check for layer state
     window.naver.maps.Event.addListener(mapRef.current, 'click', (e: any) => {
-      // Use the ref to check if the street layer is active
+      // 거리뷰 레이어가 켜져있을 때만 진입
       if (isNaverLayerOnRef.current && naverPanoramaRef.current) {
          const latlng = e.coord;
+         
+         // 1. UI 활성화 (화면에 보이게 함)
          setIsStreetViewActive(true);
          
-         // Simply update position instead of recreating instance
-         naverPanoramaRef.current.setPosition(latlng);
-         
-         // Trigger resize to ensure full render after container becomes visible
+         // 2. 렌더링 타이밍 보정 (CRITICAL FIX)
+         // DOM이 display block이나 opacity 100이 된 후 resize를 해야 화면이 나옴
          setTimeout(() => {
-            if (naverPanoramaRef.current) {
-                window.naver.maps.Event.trigger(naverPanoramaRef.current, 'resize');
+            const pano = naverPanoramaRef.current;
+            if (pano) {
+                // Resize 먼저 트리거하여 캔버스 크기 인식
+                window.naver.maps.Event.trigger(pano, 'resize');
+                
+                // 그 다음 위치 설정 (이 순서가 중요함)
+                pano.setPosition(latlng);
             }
          }, 100);
       }
@@ -356,12 +366,19 @@ const MapPane: React.FC<MapPaneProps> = ({
     }
   };
 
-  const setupKakaoRightClick = () => {
-    // Only set this up if we aren't in measurement mode, dealt with in useEffect
-    if (gisMode !== GISMode.DEFAULT) return;
-    
-    window.kakao.maps.event.addListener(mapRef.current, 'rightclick', (e: any) => {
-      if (!kakaoGisRef.current.geocoder || gisMode !== GISMode.DEFAULT) return;
+  // CHANGE: Right click -> Left click for Address
+  const setupKakaoAddressClick = () => {
+    // Clean up previous listener if exists
+    if (kakaoGisRef.current.addressClickListener) {
+        window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.addressClickListener);
+    }
+
+    const onMapClick = (e: any) => {
+      // *** IMPORTANT: Only run if we are in DEFAULT mode ***
+      // If we are measuring (DISTANCE/AREA) or in ROADVIEW, do not show address.
+      if (gisMode !== GISMode.DEFAULT) return;
+      if (!kakaoGisRef.current.geocoder) return;
+
       const pos = e.latLng;
       kakaoGisRef.current.geocoder.coord2Address(pos.getLng(), pos.getLat(), (result: any, status: any) => {
         if (status === window.kakao.maps.services.Status.OK) {
@@ -373,8 +390,20 @@ const MapPane: React.FC<MapPaneProps> = ({
           setTimeout(() => overlay.setMap(null), 3000);
         }
       });
-    });
+    };
+
+    kakaoGisRef.current.addressClickListener = onMapClick;
+    window.kakao.maps.event.addListener(mapRef.current, 'click', onMapClick);
   };
+  
+  // Re-attach address listener when gisMode changes to ensure priority
+  useEffect(() => {
+    if (config.type === 'kakao' && mapRef.current && sdkLoaded) {
+        setupKakaoAddressClick();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gisMode, config.type, sdkLoaded]);
+
 
   // 4. Update Effects
   useEffect(() => {
@@ -477,6 +506,7 @@ const MapPane: React.FC<MapPaneProps> = ({
             kakaoDrawingRef.current.overlays.push(overlay);
         };
         
+        // ** Right click ends measurement (Requested) **
         const handleRightClick = () => {
             map.setCursor('default');
             currentLine = null; // End drawing this line
@@ -516,6 +546,7 @@ const MapPane: React.FC<MapPaneProps> = ({
             }
         };
         
+        // ** Right click ends measurement (Requested) **
         const handleRightClick = () => {
             if (currentPoly) {
                  const area = Math.round(currentPoly.getArea());
