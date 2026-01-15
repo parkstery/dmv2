@@ -58,5 +58,8 @@
 </head>
 <body>
   <div id="root"></div>
+  <!-- CRITICAL FIX: React Entry Point Script -->
+  <!-- Vercel/Vite 등의 빌드 도구가 이 파일을 시작점으로 인식합니다. -->
+  <script type="module" src="/index.tsx"></script>
 </body>
 </html>
