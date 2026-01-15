@@ -47,6 +47,7 @@ const MapPane: React.FC<MapPaneProps> = ({
     geocoder: any;
     walker: any;
     roadviewLayer: boolean;
+    clickHandler?: any; // To store and remove click handler
   }>({
     rv: null,
     rvClient: null,
@@ -114,7 +115,7 @@ const MapPane: React.FC<MapPaneProps> = ({
   }, [config.type]);
 
 
-  // -- Resize Handler for Mini Map Transition --
+  // -- Resize & Refresh Handler --
   useEffect(() => {
     if (!mapRef.current) return;
     
@@ -129,6 +130,11 @@ const MapPane: React.FC<MapPaneProps> = ({
         } else if (config.type === 'naver') {
           window.naver.maps.Event.trigger(mapRef.current, 'resize');
           mapRef.current.setCenter(new window.naver.maps.LatLng(globalState.lat, globalState.lng));
+          
+          // CRITICAL: Naver Panorama Resize Trigger
+          if (isStreetViewActive && naverPanoramaRef.current) {
+             window.naver.maps.Event.trigger(naverPanoramaRef.current, 'resize');
+          }
         }
       } catch(e) { console.error(e); }
     }, 350); 
@@ -215,12 +221,18 @@ const MapPane: React.FC<MapPaneProps> = ({
          const latlng = e.coord;
          setIsStreetViewActive(true);
          
+         // Increased timeout to wait for container transition to finish
          setTimeout(() => {
            if (naverPanoContainerRef.current) {
              if (!naverPanoramaRef.current) {
+                // 파노라마 초기화
                 naverPanoramaRef.current = new window.naver.maps.Panorama(naverPanoContainerRef.current, {
                   position: latlng,
-                  pov: { pan: -135, tilt: 29, fov: 100 }
+                  pov: { pan: -135, tilt: 29, fov: 100 },
+                  visible: true,
+                  zoomControl: true,
+                  minScale: 0, 
+                  maxScale: 10,
                 });
                 
                 window.naver.maps.Event.addListener(naverPanoramaRef.current, 'position_changed', () => {
@@ -234,7 +246,7 @@ const MapPane: React.FC<MapPaneProps> = ({
                naverPanoramaRef.current.setPosition(latlng);
              }
            }
-         }, 100);
+         }, 350); // 350ms to ensure CSS transition (300ms) is complete
       }
     });
   };
@@ -395,9 +407,10 @@ const MapPane: React.FC<MapPaneProps> = ({
   const handleKakaoAction = useCallback((mode: GISMode) => {
      if (config.type !== 'kakao' || !mapRef.current) return;
      
-     if (gisMode === GISMode.ROADVIEW) {
-       mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
-       mapRef.current.setCursor('default');
+     // 이전 모드가 로드뷰였지만, 도로 뷰 오버레이는 유지해야 하므로 여기서 지우지 않음.
+     // 오직 커서와 이벤트 리스너만 정리.
+     if (gisMode !== GISMode.ROADVIEW) {
+         mapRef.current.setCursor('default');
      }
 
      if (mode === GISMode.ROADVIEW) {
@@ -426,11 +439,15 @@ const MapPane: React.FC<MapPaneProps> = ({
              }, 300);
            }
          });
-         window.kakao.maps.event.removeListener(mapRef.current, 'click', clickHandler);
-         mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
-         mapRef.current.setCursor('default');
-         setGisMode(GISMode.DEFAULT);
+         // Do not remove click listener or reset mode to keep overlay active
        };
+       
+       // Remove previous listener if exists to prevent duplicates
+       if (kakaoGisRef.current.clickHandler) {
+           window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.clickHandler);
+       }
+       
+       kakaoGisRef.current.clickHandler = clickHandler;
        window.kakao.maps.event.addListener(mapRef.current, 'click', clickHandler);
      }
      setGisMode(mode);
@@ -460,6 +477,18 @@ const MapPane: React.FC<MapPaneProps> = ({
     setIsStreetViewActive(false);
     if (config.type === 'google' && googlePanoInstanceRef.current) {
       googlePanoInstanceRef.current.setVisible(false);
+    }
+    // Fix: 카카오 거리뷰 닫을 때 오버레이 및 리스너 정리
+    if (config.type === 'kakao' && mapRef.current) {
+      if (gisMode === GISMode.ROADVIEW) {
+          mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
+          if (kakaoGisRef.current.clickHandler) {
+              window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.clickHandler);
+              kakaoGisRef.current.clickHandler = null;
+          }
+          mapRef.current.setCursor('default');
+          setGisMode(GISMode.DEFAULT);
+      }
     }
   };
 

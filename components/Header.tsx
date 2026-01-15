@@ -113,7 +113,7 @@ const Header: React.FC<HeaderProps> = ({
   }, []);
 
   return (
-    <div className="bg-[#222] text-white p-1.5 flex items-center gap-2 shadow-md z-50 overflow-x-auto whitespace-nowrap min-h-[46px]">
+    <div className="bg-[#222] text-white p-1.5 flex items-center gap-2 shadow-md z-[500] overflow-visible whitespace-nowrap min-h-[46px]">
       {/* Left Control */}
       <div className="flex items-center gap-1">
         <select 
