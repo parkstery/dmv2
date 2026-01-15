@@ -484,50 +484,178 @@ const MapPane: React.FC<MapPaneProps> = ({
 
     // 1. Distance Measurement
     if (gisMode === GISMode.DISTANCE) {
-        map.setCursor('crosshair');
-        let currentLine: any = null;
+        map.setCursor('default');
         
-        const handleClick = (e: any) => {
-            const pos = e.latLng;
-            if (!currentLine) {
-                currentLine = new window.kakao.maps.Polyline({
-                    map: map,
-                    path: [pos],
-                    strokeWeight: 3,
-                    strokeColor: '#FF3333',
-                    strokeOpacity: 1,
-                    strokeStyle: 'solid',
-                    zIndex: 10
-                });
-                kakaoDrawingRef.current.polylines.push(currentLine);
-            } else {
-                const path = currentLine.getPath();
-                path.push(pos);
-                currentLine.setPath(path);
-            }
+        let isDrawing = false;
+        let drawingLine: any = null;
+        let moveLine: any = null;
+        let distanceOverlay: any = null;
+        let dots: any[] = [];
 
-            const length = Math.round(currentLine.getLength());
-            const content = `<div class="measure-label" style="background:white; border:1px solid #333; padding:2px 4px; border-radius:3px; font-size:11px;">${length}m</div>`;
-            const overlay = new window.kakao.maps.CustomOverlay({
-                map: map,
-                position: pos,
-                content: content,
-                yAnchor: 2,
-                zIndex: 50 
-            });
-            kakaoDrawingRef.current.overlays.push(overlay);
+        const handleClick = (e: any) => {
+            const clickPosition = e.latLng;
+
+            if (!isDrawing) {
+                // Start Drawing
+                isDrawing = true;
+                
+                // Fixed line (red, solid)
+                drawingLine = new window.kakao.maps.Polyline({
+                    map: map,
+                    path: [clickPosition],
+                    strokeWeight: 3,
+                    strokeColor: '#db4040',
+                    strokeOpacity: 1,
+                    strokeStyle: 'solid'
+                });
+                
+                // Moving line (red, solid - follows mouse)
+                moveLine = new window.kakao.maps.Polyline({
+                    map: map,
+                    path: [],
+                    strokeWeight: 3,
+                    strokeColor: '#db4040',
+                    strokeOpacity: 0.5, // Slightly lighter
+                    strokeStyle: 'solid'
+                });
+                
+                // Floating Info Window
+                distanceOverlay = new window.kakao.maps.CustomOverlay({
+                    map: map,
+                    content: '<div class="info"></div>', // Initial placeholder
+                    position: clickPosition,
+                    xAnchor: 0,
+                    yAnchor: 0,
+                    zIndex: 100
+                });
+
+                // Start dot
+                const circle = new window.kakao.maps.CustomOverlay({
+                    map: map,
+                    position: clickPosition,
+                    content: '<div style="width:8px; height:8px; background:black; border:2px solid white; border-radius:50%;"></div>',
+                    zIndex: 50
+                });
+                dots.push(circle);
+
+                // Push to global ref for cleanup
+                kakaoDrawingRef.current.polylines.push(drawingLine, moveLine);
+                kakaoDrawingRef.current.overlays.push(distanceOverlay, circle);
+                
+            } else {
+                // Add Point
+                const path = drawingLine.getPath();
+                path.push(clickPosition);
+                drawingLine.setPath(path);
+
+                const distance = Math.round(drawingLine.getLength());
+                
+                // Add intermediate dot
+                const circle = new window.kakao.maps.CustomOverlay({
+                    map: map,
+                    position: clickPosition,
+                    content: '<div style="width:8px; height:8px; background:black; border:2px solid white; border-radius:50%;"></div>',
+                    zIndex: 50
+                });
+                
+                // Add intermediate text overlay (Accumulated Distance)
+                const content = `<div style="background:white; padding:2px 5px; border:1px solid #888; border-radius:3px; font-size:11px; color:#333;">${distance}m</div>`;
+                const nodeOverlay = new window.kakao.maps.CustomOverlay({
+                    map: map,
+                    position: clickPosition,
+                    content: content,
+                    yAnchor: 1.5,
+                    zIndex: 50
+                });
+                
+                dots.push(circle, nodeOverlay);
+                kakaoDrawingRef.current.overlays.push(circle, nodeOverlay);
+            }
+        };
+
+        const handleMouseMove = (e: any) => {
+            if (!isDrawing) return;
+            const mousePosition = e.latLng;
+
+            // Update move line path: [last fixed point, mouse point]
+            const path = drawingLine.getPath();
+            const lastPos = path[path.length - 1];
+            moveLine.setPath([lastPos, mousePosition]);
+            moveLine.setMap(map);
+
+            // Calculate total distance including mouse segment
+            const distance = Math.round(drawingLine.getLength() + moveLine.getLength());
+            
+            // Update floating info window
+            const content = `<div style="background:white; border:1px solid #db4040; padding:5px; border-radius:3px; font-size:12px; font-weight:bold; color:#db4040; box-shadow:1px 1px 3px rgba(0,0,0,0.2);">
+                <span style="color:#333; font-weight:normal;">총거리</span> ${distance}m
+            </div>`;
+            
+            distanceOverlay.setPosition(mousePosition);
+            distanceOverlay.setContent(content);
         };
         
-        const handleRightClick = () => {
-            map.setCursor('default');
-            currentLine = null; 
+        const handleRightClick = (e: any) => {
+             if (!isDrawing) return;
+
+             // Finish Drawing
+             moveLine.setMap(null); // Remove rubber-band line
+             distanceOverlay.setMap(null); // Remove floating info window
+
+             const path = drawingLine.getPath();
+             // Right click usually ends at the last CLICKED point, 
+             // so we don't add the right-click position as a new node.
+             
+             const totalDist = Math.round(drawingLine.getLength());
+             const lastPos = path[path.length-1];
+
+             // Summary Overlay (Walk/Bike Time)
+             const walkTime = Math.floor(totalDist / 67); // approx 4km/h = 67m/min
+             const bycicleTime = Math.floor(totalDist / 227); // approx 16km/h = 267m/min (Kakao uses ~227)
+
+             const walkHour = Math.floor(walkTime / 60);
+             const walkMin = walkTime % 60;
+             const bikeHour = Math.floor(bycicleTime / 60);
+             const bikeMin = bycicleTime % 60;
+
+             const walkText = walkHour > 0 ? `${walkHour}시간 ${walkMin}분` : `${walkMin}분`;
+             const bikeText = bikeHour > 0 ? `${bikeHour}시간 ${bikeMin}분` : `${bikeMin}분`;
+
+             const content = `
+                <div style="background:white; border:1px solid #333; padding:10px; border-radius:5px; font-size:12px; min-width:140px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); font-family: sans-serif;">
+                    <div style="font-weight:bold; margin-bottom:5px; border-bottom:1px solid #ddd; padding-bottom:5px;">
+                        총거리 <span style="color:#db4040; font-size:14px;">${totalDist}</span>m
+                    </div>
+                    <div style="color:#555; line-height:1.5;">
+                        도보 ${walkText}<br>
+                        자전거 ${bikeText}
+                    </div>
+                </div>
+             `;
+
+             const endOverlay = new window.kakao.maps.CustomOverlay({
+                 map: map,
+                 position: lastPos,
+                 content: content,
+                 yAnchor: 1.2,
+                 zIndex: 200
+             });
+             kakaoDrawingRef.current.overlays.push(endOverlay);
+
+             // Reset local state
+             isDrawing = false;
+             drawingLine = null;
+             moveLine = null;
+             distanceOverlay = null;
         };
 
         window.kakao.maps.event.addListener(map, 'click', handleClick);
+        window.kakao.maps.event.addListener(map, 'mousemove', handleMouseMove);
         window.kakao.maps.event.addListener(map, 'rightclick', handleRightClick);
         
         kakaoDrawingRef.current.listeners.push(
             () => window.kakao.maps.event.removeListener(map, 'click', handleClick),
+            () => window.kakao.maps.event.removeListener(map, 'mousemove', handleMouseMove),
             () => window.kakao.maps.event.removeListener(map, 'rightclick', handleRightClick)
         );
     } 
