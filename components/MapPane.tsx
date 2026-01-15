@@ -39,6 +39,7 @@ const MapPane: React.FC<MapPaneProps> = ({
   const naverPanoramaRef = useRef<any>(null);
   const naverPanoContainerRef = useRef<HTMLDivElement>(null);
   const [isNaverLayerOn, setIsNaverLayerOn] = useState(false);
+  const isNaverLayerOnRef = useRef(false); // Ref to track layer state inside event listeners
 
   // Kakao Refs
   const kakaoGisRef = useRef<{
@@ -110,7 +111,8 @@ const MapPane: React.FC<MapPaneProps> = ({
   useEffect(() => {
     isDragging.current = false;
     isProgrammaticUpdate.current = false;
-    setIsNaverLayerOn(false); // Reset GIS tools
+    setIsNaverLayerOn(false); 
+    isNaverLayerOnRef.current = false; // Reset ref
     setGisMode(GISMode.DEFAULT);
     setIsStreetViewActive(false); // Close street view when map type changes
     
@@ -236,38 +238,37 @@ const MapPane: React.FC<MapPaneProps> = ({
     
     setupMapListeners('naver');
     
+    // Add click listener with explicit ref check for layer state
     window.naver.maps.Event.addListener(mapRef.current, 'click', (e: any) => {
-      if (naverStreetLayerRef.current?.getMap()) {
+      // Use the ref to check if the street layer is active
+      if (isNaverLayerOnRef.current) {
          const latlng = e.coord;
          setIsStreetViewActive(true);
          
          // Increased delay to 400ms to ensure the container transition (300ms) has fully finished
-         // and the container has a non-zero size.
          setTimeout(() => {
            if (naverPanoContainerRef.current) {
              naverPanoContainerRef.current.innerHTML = '';
              
              try {
                 // Ensure the container is visible to the DOM before init
-                naverPanoramaRef.current = new window.naver.maps.Panorama(naverPanoContainerRef.current, {
+                const pano = new window.naver.maps.Panorama(naverPanoContainerRef.current, {
                   position: latlng,
                   pov: { pan: -135, tilt: 29, fov: 100 },
                   visible: true,
-                  zoomControl: true,
-                  minScale: 0, 
-                  maxScale: 10,
-                  flightSpot: true
+                  zoomControl: true
                 });
+                naverPanoramaRef.current = pano;
                 
-                // Force a resize event after a short tick to fix white screen issues
+                // Force a resize event after creation to ensure full render
                 setTimeout(() => {
                     if (naverPanoramaRef.current) {
                         window.naver.maps.Event.trigger(naverPanoramaRef.current, 'resize');
                     }
-                }, 50);
+                }, 100);
 
-                window.naver.maps.Event.addListener(naverPanoramaRef.current, 'position_changed', () => {
-                   const pos = naverPanoramaRef.current.getPosition();
+                window.naver.maps.Event.addListener(pano, 'position_changed', () => {
+                   const pos = pano.getPosition();
                    isDragging.current = true;
                    onStateChange({ lat: pos.lat(), lng: pos.lng(), zoom: mapRef.current.getZoom() });
                    mapRef.current.setCenter(pos);
@@ -465,14 +466,19 @@ const MapPane: React.FC<MapPaneProps> = ({
 
   const toggleNaverStreetLayer = useCallback(() => {
     if (!mapRef.current || !naverStreetLayerRef.current) return;
-    if (isNaverLayerOn) {
-        naverStreetLayerRef.current.setMap(null);
-        mapRef.current.setCursor('default');
-    } else {
+    
+    // Toggle State and Ref for Sync
+    const nextState = !isNaverLayerOn;
+    setIsNaverLayerOn(nextState);
+    isNaverLayerOnRef.current = nextState;
+
+    if (nextState) {
         naverStreetLayerRef.current.setMap(mapRef.current);
         mapRef.current.setCursor('crosshair');
+    } else {
+        naverStreetLayerRef.current.setMap(null);
+        mapRef.current.setCursor('default');
     }
-    setIsNaverLayerOn(!isNaverLayerOn);
   }, [isNaverLayerOn]);
 
   const closeStreetView = () => {
