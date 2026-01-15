@@ -59,14 +59,12 @@ const MapPane: React.FC<MapPaneProps> = ({
     roadviewLayer: false
   });
   
-  // Kakao Drawing Refs for Measurement
+  // Kakao Drawing Refs for Measurement (Global storage for bulk clear)
   const kakaoDrawingRef = useRef<{
-    polylines: any[];
-    polygons: any[];
-    overlays: any[];
+    overlays: any[]; // Stores everything for bulk clear: lines, polygons, overlays
     listeners: (() => void)[];
   }>({
-    polylines: [], polygons: [], overlays: [], listeners: []
+    overlays: [], listeners: []
   });
 
   const [gisMode, setGisMode] = useState<GISMode>(GISMode.DEFAULT);
@@ -346,60 +344,6 @@ const MapPane: React.FC<MapPaneProps> = ({
   }, [gisMode, config.type, sdkLoaded]);
 
 
-  // 4. Update Effects
-  useEffect(() => {
-    if (!mapRef.current) return;
-    if (isDragging.current) return;
-    isProgrammaticUpdate.current = true;
-    try {
-        if (config.type === 'google') {
-          mapRef.current.setCenter({ lat: globalState.lat, lng: globalState.lng });
-          mapRef.current.setZoom(globalState.zoom);
-        } else if (config.type === 'kakao') {
-          const center = mapRef.current.getCenter();
-          if (Math.abs(center.getLat() - globalState.lat) > 0.000001 || Math.abs(center.getLng() - globalState.lng) > 0.000001) {
-             mapRef.current.setCenter(new window.kakao.maps.LatLng(globalState.lat, globalState.lng));
-          }
-          mapRef.current.setLevel(zoomToKakao(globalState.zoom));
-        } else if (config.type === 'naver') {
-          mapRef.current.setCenter(new window.naver.maps.LatLng(globalState.lat, globalState.lng));
-          mapRef.current.setZoom(globalState.zoom);
-        }
-    } catch(e) {}
-    setTimeout(() => { isProgrammaticUpdate.current = false; }, 200); 
-  }, [globalState.lat, globalState.lng, globalState.zoom, config.type, sdkLoaded]);
-
-  useEffect(() => {
-    if (!mapRef.current) return;
-    try {
-      if (config.type === 'google') {
-        mapRef.current.setMapTypeId(config.isSatellite ? 'satellite' : 'roadmap');
-      } else if (config.type === 'kakao') {
-        mapRef.current.setMapTypeId(config.isSatellite ? window.kakao.maps.MapTypeId.HYBRID : window.kakao.maps.MapTypeId.ROADMAP);
-      } else if (config.type === 'naver') {
-        mapRef.current.setMapTypeId(config.isSatellite ? window.naver.maps.MapTypeId.SATELLITE : window.naver.maps.MapTypeId.NORMAL);
-      }
-    } catch(e) {}
-  }, [config.isSatellite, config.type, sdkLoaded]);
-
-  useEffect(() => {
-    if (!mapRef.current) return;
-    if (markerRef.current) {
-        try { markerRef.current.setMap(null); } catch(e){}
-    }
-    if (searchPos) {
-      try {
-          if (config.type === 'google') {
-            markerRef.current = new window.google.maps.Marker({ position: searchPos, map: mapRef.current });
-          } else if (config.type === 'kakao') {
-            markerRef.current = new window.kakao.maps.Marker({ position: new window.kakao.maps.LatLng(searchPos.lat, searchPos.lng), map: mapRef.current });
-          } else if (config.type === 'naver') {
-            markerRef.current = new window.naver.maps.Marker({ position: new window.naver.maps.LatLng(searchPos.lat, searchPos.lng), map: mapRef.current });
-          }
-      } catch(e) {}
-    }
-  }, [searchPos, config.type, sdkLoaded]);
-
   // -- Naver Street View Click Listener & Marker Sync --
   useEffect(() => {
     if (config.type === 'naver' && mapRef.current && sdkLoaded) {
@@ -476,7 +420,7 @@ const MapPane: React.FC<MapPaneProps> = ({
   useEffect(() => {
     if (config.type !== 'kakao' || !mapRef.current) return;
     
-    // Clear listeners from previous mode
+    // Cleanup Listeners only (keep overlays for manual close)
     kakaoDrawingRef.current.listeners.forEach(fn => fn());
     kakaoDrawingRef.current.listeners = [];
 
@@ -490,7 +434,10 @@ const MapPane: React.FC<MapPaneProps> = ({
         let drawingLine: any = null;
         let moveLine: any = null;
         let distanceOverlay: any = null;
-        let dots: any[] = [];
+        
+        // Use a local array to track the *current* measurement session's objects
+        // so we can delete ONLY these when the "X" button is clicked.
+        let currentSessionObjects: any[] = [];
 
         const handleClick = (e: any) => {
             const clickPosition = e.latLng;
@@ -498,8 +445,9 @@ const MapPane: React.FC<MapPaneProps> = ({
             if (!isDrawing) {
                 // Start Drawing
                 isDrawing = true;
+                currentSessionObjects = []; // Start new session
                 
-                // Fixed line (red, solid)
+                // Fixed line
                 drawingLine = new window.kakao.maps.Polyline({
                     map: map,
                     path: [clickPosition],
@@ -509,20 +457,20 @@ const MapPane: React.FC<MapPaneProps> = ({
                     strokeStyle: 'solid'
                 });
                 
-                // Moving line (red, solid - follows mouse)
+                // Moving line
                 moveLine = new window.kakao.maps.Polyline({
                     map: map,
                     path: [],
                     strokeWeight: 3,
                     strokeColor: '#db4040',
-                    strokeOpacity: 0.5, // Slightly lighter
+                    strokeOpacity: 0.5, 
                     strokeStyle: 'solid'
                 });
                 
                 // Floating Info Window
                 distanceOverlay = new window.kakao.maps.CustomOverlay({
                     map: map,
-                    content: '<div class="info"></div>', // Initial placeholder
+                    content: '<div class="info"></div>', 
                     position: clickPosition,
                     xAnchor: 0,
                     yAnchor: 0,
@@ -536,11 +484,10 @@ const MapPane: React.FC<MapPaneProps> = ({
                     content: '<div style="width:8px; height:8px; background:black; border:2px solid white; border-radius:50%;"></div>',
                     zIndex: 50
                 });
-                dots.push(circle);
-
-                // Push to global ref for cleanup
-                kakaoDrawingRef.current.polylines.push(drawingLine, moveLine);
-                kakaoDrawingRef.current.overlays.push(distanceOverlay, circle);
+                
+                currentSessionObjects.push(drawingLine, moveLine, distanceOverlay, circle);
+                // Also push to global ref for "Clear All" functionality
+                kakaoDrawingRef.current.overlays.push(drawingLine, moveLine, distanceOverlay, circle);
                 
             } else {
                 // Add Point
@@ -550,7 +497,7 @@ const MapPane: React.FC<MapPaneProps> = ({
 
                 const distance = Math.round(drawingLine.getLength());
                 
-                // Add intermediate dot
+                // Dot
                 const circle = new window.kakao.maps.CustomOverlay({
                     map: map,
                     position: clickPosition,
@@ -558,7 +505,7 @@ const MapPane: React.FC<MapPaneProps> = ({
                     zIndex: 50
                 });
                 
-                // Add intermediate text overlay (Accumulated Distance)
+                // Intermediate distance
                 const content = `<div style="background:white; padding:2px 5px; border:1px solid #888; border-radius:3px; font-size:11px; color:#333;">${distance}m</div>`;
                 const nodeOverlay = new window.kakao.maps.CustomOverlay({
                     map: map,
@@ -568,7 +515,7 @@ const MapPane: React.FC<MapPaneProps> = ({
                     zIndex: 50
                 });
                 
-                dots.push(circle, nodeOverlay);
+                currentSessionObjects.push(circle, nodeOverlay);
                 kakaoDrawingRef.current.overlays.push(circle, nodeOverlay);
             }
         };
@@ -577,16 +524,13 @@ const MapPane: React.FC<MapPaneProps> = ({
             if (!isDrawing) return;
             const mousePosition = e.latLng;
 
-            // Update move line path: [last fixed point, mouse point]
             const path = drawingLine.getPath();
             const lastPos = path[path.length - 1];
             moveLine.setPath([lastPos, mousePosition]);
             moveLine.setMap(map);
 
-            // Calculate total distance including mouse segment
             const distance = Math.round(drawingLine.getLength() + moveLine.getLength());
             
-            // Update floating info window
             const content = `<div style="background:white; border:1px solid #db4040; padding:5px; border-radius:3px; font-size:12px; font-weight:bold; color:#db4040; box-shadow:1px 1px 3px rgba(0,0,0,0.2);">
                 <span style="color:#333; font-weight:normal;">총거리</span> ${distance}m
             </div>`;
@@ -599,20 +543,16 @@ const MapPane: React.FC<MapPaneProps> = ({
              if (!isDrawing) return;
 
              // Finish Drawing
-             moveLine.setMap(null); // Remove rubber-band line
-             distanceOverlay.setMap(null); // Remove floating info window
+             moveLine.setMap(null); 
+             distanceOverlay.setMap(null); 
 
              const path = drawingLine.getPath();
-             // Right click usually ends at the last CLICKED point, 
-             // so we don't add the right-click position as a new node.
-             
              const totalDist = Math.round(drawingLine.getLength());
              const lastPos = path[path.length-1];
 
-             // Summary Overlay (Walk/Bike Time)
-             const walkTime = Math.floor(totalDist / 67); // approx 4km/h = 67m/min
-             const bycicleTime = Math.floor(totalDist / 227); // approx 16km/h = 267m/min (Kakao uses ~227)
-
+             // Calculations
+             const walkTime = Math.floor(totalDist / 67); 
+             const bycicleTime = Math.floor(totalDist / 227); 
              const walkHour = Math.floor(walkTime / 60);
              const walkMin = walkTime % 60;
              const bikeHour = Math.floor(bycicleTime / 60);
@@ -621,16 +561,18 @@ const MapPane: React.FC<MapPaneProps> = ({
              const walkText = walkHour > 0 ? `${walkHour}시간 ${walkMin}분` : `${walkMin}분`;
              const bikeText = bikeHour > 0 ? `${bikeHour}시간 ${bikeMin}분` : `${bikeMin}분`;
 
-             const content = `
-                <div style="background:white; border:1px solid #333; padding:10px; border-radius:5px; font-size:12px; min-width:140px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); font-family: sans-serif;">
-                    <div style="font-weight:bold; margin-bottom:5px; border-bottom:1px solid #ddd; padding-bottom:5px;">
-                        총거리 <span style="color:#db4040; font-size:14px;">${totalDist}</span>m
-                    </div>
-                    <div style="color:#555; line-height:1.5;">
-                        도보 ${walkText}<br>
-                        자전거 ${bikeText}
-                    </div>
+             // Create Summary Overlay with Close Button
+             const content = document.createElement('div');
+             content.style.cssText = 'background:white; border:1px solid #333; padding:10px; border-radius:5px; font-size:12px; min-width:140px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); font-family: sans-serif; position: relative;';
+             content.innerHTML = `
+                <div style="font-weight:bold; margin-bottom:5px; border-bottom:1px solid #ddd; padding-bottom:5px; padding-right: 15px;">
+                    총거리 <span style="color:#db4040; font-size:14px;">${totalDist}</span>m
                 </div>
+                <div style="color:#555; line-height:1.5;">
+                    도보 ${walkText}<br>
+                    자전거 ${bikeText}
+                </div>
+                <button class="close-btn" style="position: absolute; top: 2px; right: 2px; border: none; background: none; cursor: pointer; color: #999; font-size: 16px; font-weight: bold; line-height: 1;">×</button>
              `;
 
              const endOverlay = new window.kakao.maps.CustomOverlay({
@@ -640,6 +582,19 @@ const MapPane: React.FC<MapPaneProps> = ({
                  yAnchor: 1.2,
                  zIndex: 200
              });
+
+             // Add Close Logic
+             const closeBtn = content.querySelector('.close-btn');
+             if (closeBtn) {
+                 closeBtn.addEventListener('click', (ev) => {
+                     ev.stopPropagation(); // Prevent map click
+                     endOverlay.setMap(null);
+                     // Remove all objects related to this measurement
+                     currentSessionObjects.forEach(obj => obj.setMap(null));
+                 });
+             }
+             
+             // Push endOverlay to storage
              kakaoDrawingRef.current.overlays.push(endOverlay);
 
              // Reset local state
@@ -661,301 +616,24 @@ const MapPane: React.FC<MapPaneProps> = ({
     } 
     // 2. Area Measurement
     else if (gisMode === GISMode.AREA) {
-        map.setCursor('crosshair');
-        let currentPoly: any = null;
+        map.setCursor('default');
         
+        let isDrawing = false;
+        let drawingPolygon: any = null; // Committed polygon
+        let movePolygon: any = null;    // Dynamic polygon (preview)
+        let areaOverlay: any = null;    // Floating info
+        let currentSessionObjects: any[] = [];
+
         const handleClick = (e: any) => {
-            const pos = e.latLng;
-            if (!currentPoly) {
-                currentPoly = new window.kakao.maps.Polygon({
+            const clickPosition = e.latLng;
+
+            if (!isDrawing) {
+                // Start Drawing
+                isDrawing = true;
+                currentSessionObjects = [];
+
+                // Initialize Committed Polygon
+                drawingPolygon = new window.kakao.maps.Polygon({
                     map: map,
-                    path: [pos],
-                    strokeWeight: 3,
-                    strokeColor: '#39f',
-                    strokeOpacity: 0.8,
-                    fillColor: '#A2D4EC',
-                    fillOpacity: 0.5, 
-                    zIndex: 10
-                });
-                kakaoDrawingRef.current.polygons.push(currentPoly);
-            } else {
-                const path = currentPoly.getPath();
-                path.push(pos);
-                currentPoly.setPath(path);
-            }
-        };
-        
-        const handleRightClick = () => {
-            if (currentPoly) {
-                 const area = Math.round(currentPoly.getArea());
-                 const path = currentPoly.getPath();
-                 const lastPos = path[path.length-1];
-                 const content = `<div class="measure-label" style="background:white; border:1px solid #333; padding:2px 4px; border-radius:3px; font-size:11px;">${area}m²</div>`;
-                 const overlay = new window.kakao.maps.CustomOverlay({
-                    map: map,
-                    position: lastPos,
-                    content: content,
-                    yAnchor: 2,
-                    zIndex: 50
-                 });
-                 kakaoDrawingRef.current.overlays.push(overlay);
-                 currentPoly = null;
-                 map.setCursor('default');
-            }
-        };
-
-        window.kakao.maps.event.addListener(map, 'click', handleClick);
-        window.kakao.maps.event.addListener(map, 'rightclick', handleRightClick);
-        
-        kakaoDrawingRef.current.listeners.push(
-            () => window.kakao.maps.event.removeListener(map, 'click', handleClick),
-            () => window.kakao.maps.event.removeListener(map, 'rightclick', handleRightClick)
-        );
-    }
-  }, [gisMode, config.type]);
-
-
-  // 5. Actions
-  const handleKakaoAction = useCallback((mode: GISMode) => {
-     if (config.type !== 'kakao' || !mapRef.current) return;
-     
-     // Reset previous Road View mode if active
-     if (gisMode === GISMode.ROADVIEW && mode !== GISMode.ROADVIEW) {
-         mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
-         if (kakaoGisRef.current.clickHandler) {
-             window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.clickHandler);
-             kakaoGisRef.current.clickHandler = null;
-         }
-         if (kakaoGisRef.current.walkerOverlay) {
-             kakaoGisRef.current.walkerOverlay.setMap(null);
-             kakaoGisRef.current.walkerOverlay = null;
-         }
-     }
-     mapRef.current.setCursor('default');
-
-     if (mode === GISMode.ROADVIEW) {
-       mapRef.current.addOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
-       mapRef.current.setCursor('crosshair');
-       
-       const clickHandler = (e: any) => {
-         const pos = e.latLng;
-         kakaoGisRef.current.rvClient.getNearestPanoId(pos, 50, (panoId: any) => {
-           if (panoId) {
-             setIsStreetViewActive(true); 
-             setTimeout(() => {
-               if (roadviewRef.current) {
-                 const rv = new window.kakao.maps.Roadview(roadviewRef.current);
-                 rv.setPanoId(panoId, pos);
-                 kakaoGisRef.current.rv = rv;
-
-                 // Create Walker Overlay on Mini-Map
-                 if (!kakaoGisRef.current.walkerOverlay) {
-                     const content = document.createElement('div');
-                     content.style.width = '26px';
-                     content.style.height = '46px';
-                     content.style.background = 'url(https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/walker.png) no-repeat 0 0';
-                     content.style.backgroundSize = '26px 46px';
-                     
-                     kakaoGisRef.current.walkerOverlay = new window.kakao.maps.CustomOverlay({
-                         position: pos,
-                         content: content,
-                         map: mapRef.current,
-                         yAnchor: 1
-                     });
-                 }
-
-                 window.kakao.maps.event.addListener(rv, 'position_changed', () => {
-                    const rvPos = rv.getPosition();
-                    isDragging.current = true; 
-                    
-                    // Sync Map Center
-                    onStateChange({ lat: rvPos.getLat(), lng: rvPos.getLng(), zoom: mapRef.current.getLevel() });
-                    mapRef.current.setCenter(rvPos);
-                    
-                    // Sync Walker
-                    if (kakaoGisRef.current.walkerOverlay) {
-                        kakaoGisRef.current.walkerOverlay.setPosition(rvPos);
-                    }
-
-                    setTimeout(() => isDragging.current = false, 200);
-                 });
-
-                 // Rotate Walker on Viewpoint Change
-                 window.kakao.maps.event.addListener(rv, 'viewpoint_changed', () => {
-                     const viewpoint = rv.getViewpoint();
-                     if (kakaoGisRef.current.walkerOverlay) {
-                         const content = kakaoGisRef.current.walkerOverlay.getContent();
-                         content.style.transform = `rotate(${viewpoint.pan}deg)`;
-                     }
-                 });
-               }
-             }, 300);
-           }
-         });
-       };
-       
-       kakaoGisRef.current.clickHandler = clickHandler;
-       window.kakao.maps.event.addListener(mapRef.current, 'click', clickHandler);
-     }
-
-     setGisMode(mode);
-  }, [config.type, gisMode]);
-
-  const toggleKakaoCadastral = useCallback(() => {
-    if (config.type !== 'kakao' || !mapRef.current) return;
-    const isCadastral = kakaoGisRef.current.roadviewLayer;
-    if (isCadastral) mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.USE_DISTRICT);
-    else mapRef.current.addOverlayMapTypeId(window.kakao.maps.MapTypeId.USE_DISTRICT);
-    kakaoGisRef.current.roadviewLayer = !isCadastral;
-  }, [config.type]);
-
-  const toggleNaverStreetLayer = useCallback(() => {
-    if (!mapRef.current || !naverStreetLayerRef.current) return;
-    
-    // Toggle State and Ref for Sync
-    const nextState = !isNaverLayerOn;
-    setIsNaverLayerOn(nextState);
-
-    if (nextState) {
-        naverStreetLayerRef.current.setMap(mapRef.current);
-        mapRef.current.setCursor('crosshair');
-    } else {
-        naverStreetLayerRef.current.setMap(null);
-        mapRef.current.setCursor('default');
-    }
-  }, [isNaverLayerOn]);
-
-  const clearKakaoDrawingResources = () => {
-      kakaoDrawingRef.current.polylines.forEach(p => p.setMap(null));
-      kakaoDrawingRef.current.polygons.forEach(p => p.setMap(null));
-      kakaoDrawingRef.current.overlays.forEach(o => o.setMap(null));
-      kakaoDrawingRef.current.listeners.forEach(fn => fn());
-      kakaoDrawingRef.current = { polylines: [], polygons: [], overlays: [], listeners: [] };
-  };
-
-  const closeStreetView = () => {
-    setIsStreetViewActive(false);
-    if (config.type === 'google') {
-      if (googlePanoInstanceRef.current) googlePanoInstanceRef.current.setVisible(false);
-      if (googleCoverageLayerRef.current) googleCoverageLayerRef.current.setMap(null);
-    }
-    // Fix: Clean up Kakao Roadview overlays/handlers
-    if (config.type === 'kakao' && mapRef.current) {
-      if (gisMode === GISMode.ROADVIEW) {
-          mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
-          if (kakaoGisRef.current.clickHandler) {
-              window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.clickHandler);
-              kakaoGisRef.current.clickHandler = null;
-          }
-          if (kakaoGisRef.current.walkerOverlay) {
-              kakaoGisRef.current.walkerOverlay.setMap(null);
-              kakaoGisRef.current.walkerOverlay = null;
-          }
-          mapRef.current.setCursor('default');
-          setGisMode(GISMode.DEFAULT);
-      }
-    }
-    // Fix: Clean up Naver
-    if (config.type === 'naver') {
-        if (naverMarkerRef.current) {
-            naverMarkerRef.current.setMap(null);
-            naverMarkerRef.current = null;
-        }
-    }
-  };
-
-  return (
-    <div className="w-full h-full relative group bg-gray-50 overflow-hidden">
-      {/* 1. Main Map / Mini Map Container */}
-      <div 
-        ref={containerRef} 
-        className={`transition-all duration-300 ease-in-out bg-white
-          ${isStreetViewActive 
-            ? 'absolute bottom-3 left-3 w-[240px] h-[240px] z-[100] border-4 border-white shadow-2xl rounded-lg overflow-hidden' 
-            : 'w-full h-full z-0'
-          }`}
-      />
-
-      {/* 2. Street View Containers */}
-      <div 
-        ref={googlePanoRef}
-        className={`absolute inset-0 bg-black transition-opacity duration-300 
-           ${config.type === 'google' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
-      />
-
-      <div 
-        ref={roadviewRef}
-        className={`absolute inset-0 bg-black transition-opacity duration-300 
-           ${config.type === 'kakao' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
-      />
-
-      <div 
-        ref={naverPanoContainerRef}
-        className={`absolute inset-0 bg-black transition-opacity duration-300 
-           ${config.type === 'naver' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
-      />
-
-      {/* 3. Close Button (Square Icon) */}
-      {isStreetViewActive && (
-        <button 
-          onClick={closeStreetView}
-          className="absolute top-4 right-4 z-[110] bg-white text-gray-800 w-10 h-10 flex items-center justify-center shadow-lg rounded-sm hover:bg-gray-100 transition-colors border border-gray-300"
-          title="거리뷰 닫기"
-        >
-          <svg viewBox="0 0 24 24" className="w-6 h-6 fill-current">
-            <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-          </svg>
-        </button>
-      )}
-
-      {/* 4. Loading & Controls */}
-      {!sdkLoaded && (
-         <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-[120] text-gray-500">
-            <span>Loading...</span>
-         </div>
-      )}
-
-      <button 
-        onClick={onToggleFullscreen}
-        className="absolute bottom-10 right-3 z-[110] bg-white p-1.5 rounded shadow border border-gray-300 hover:bg-gray-50 transition-colors"
-        title="전체화면"
-      >
-        {isFullscreen ? (
-          <svg viewBox="0 0 24 24" className="w-5 h-5 fill-current text-gray-700"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
-        ) : (
-          <svg viewBox="0 0 24 24" className="w-5 h-5 fill-current text-gray-700"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
-        )}
-      </button>
-      
-      {/* Repositioned Naver Toggle Button: Left-Top */}
-      {config.type === 'naver' && (
-        <button 
-          onClick={toggleNaverStreetLayer} 
-          className={`absolute top-4 left-4 z-[110] px-2 py-1 rounded shadow border text-xs font-bold transition-colors ${isNaverLayerOn ? 'bg-blue-600 text-white border-blue-700' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
-        >
-          {isNaverLayerOn ? '거리뷰 ON' : '거리뷰'}
-        </button>
-      )}
-      
-      {config.type === 'kakao' && (
-        <KakaoGisToolbar activeMode={gisMode} onAction={handleKakaoAction} onToggleCadastral={toggleKakaoCadastral} onClear={() => {
-              setGisMode(GISMode.DEFAULT);
-              if (mapRef.current) {
-                mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
-                mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.USE_DISTRICT);
-                mapRef.current.setCursor('default');
-              }
-              kakaoGisRef.current.roadviewLayer = false;
-              if (kakaoGisRef.current.walkerOverlay) {
-                  kakaoGisRef.current.walkerOverlay.setMap(null);
-                  kakaoGisRef.current.walkerOverlay = null;
-              }
-              clearKakaoDrawingResources();
-            }}
-        />
-      )}
-    </div>
-  );
-};
-
-export default MapPane;
+                    path: [clickPosition], 
+                    strokeWeight
