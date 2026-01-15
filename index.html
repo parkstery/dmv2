@@ -6,12 +6,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dual Map Viewer Pro</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Kakao Maps SDK -->
-  <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=8d2d116d6a534a98e73133808f5843a6&libraries=services,drawing,clusterer"></script>
+  <!-- Kakao Maps SDK: autoload=false 필수 추가 -->
+  <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=8d2d116d6a534a98e73133808f5843a6&libraries=services,drawing,clusterer&autoload=false"></script>
   <!-- Naver Maps SDK -->
   <script src="https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=a4kf3r53du"></script>
-  <!-- Google Maps SDK -->
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBYXu5yKdW71VuKmI-N2M2xbvMaYTK2HCg"></script>
+  <!-- Google Maps SDK: loading=async 추가 -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBYXu5yKdW71VuKmI-N2M2xbvMaYTK2HCg&loading=async"></script>
   <style>
     body { margin: 0; overflow: hidden; }
     #root { height: 100vh; width: 100vw; }

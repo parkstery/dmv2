@@ -21,7 +21,8 @@ const MapPane: React.FC<MapPaneProps> = ({
   const mapRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
   const isInternalUpdate = useRef(false);
-  const [sdkLoaded, setSdkLoaded] = useState(false); // Track SDK loading status
+  const [sdkLoaded, setSdkLoaded] = useState(false); 
+  const [initError, setInitError] = useState<string | null>(null); // 화면에 에러 표시용 상태
 
   // Naver Street View Refs
   const naverStreetLayerRef = useRef<any>(null);
@@ -60,6 +61,7 @@ const MapPane: React.FC<MapPaneProps> = ({
   // Initialization Logic
   useEffect(() => {
     let intervalId: any = null;
+    setInitError(null); // Reset error on config change
 
     const checkAndInit = () => {
       if (config.type === 'google' && window.google && window.google.maps) {
@@ -67,7 +69,7 @@ const MapPane: React.FC<MapPaneProps> = ({
         return true;
       }
       if (config.type === 'kakao' && window.kakao && window.kakao.maps) {
-        // Kakao needs explicit load wait sometimes
+        // Kakao needs explicit load wait because of autoload=false
         window.kakao.maps.load(() => {
           initKakaoMap();
         });
@@ -116,7 +118,10 @@ const MapPane: React.FC<MapPaneProps> = ({
         zoomControl: true,
       });
       setupMapListeners('google');
-    } catch (e) { console.error("Google Init Error", e); }
+    } catch (e: any) { 
+      console.error("Google Init Error", e); 
+      setInitError(`Google Map Error: ${e.message}`);
+    }
   };
 
   const initKakaoMap = () => {
@@ -139,7 +144,10 @@ const MapPane: React.FC<MapPaneProps> = ({
       
       setupMapListeners('kakao');
       setupKakaoRightClick();
-    } catch (e) { console.error("Kakao Init Error", e); }
+    } catch (e: any) { 
+      console.error("Kakao Init Error", e); 
+      setInitError(`Kakao Map Error: ${e.message}`);
+    }
   };
 
   const initNaverMap = () => {
@@ -159,7 +167,10 @@ const MapPane: React.FC<MapPaneProps> = ({
       });
 
       setupMapListeners('naver');
-    } catch (e) { console.error("Naver Init Error", e); }
+    } catch (e: any) { 
+      console.error("Naver Init Error", e); 
+      setInitError(`Naver Map Error: ${e.message}`);
+    }
   };
 
   const setupMapListeners = (type: MapVendor) => {
@@ -283,7 +294,6 @@ const MapPane: React.FC<MapPaneProps> = ({
 
   // GIS Actions (Kakao & Naver Street View)
   const handleGisAction = useCallback((mode: GISMode) => {
-     // ... (Existing GIS Logic - Keep same)
      if (config.type !== 'kakao' || !mapRef.current) return;
      if (gisMode === GISMode.ROADVIEW) {
        mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
@@ -332,16 +342,26 @@ const MapPane: React.FC<MapPaneProps> = ({
   }, []);
 
   return (
-    <div className="w-full h-full relative group bg-gray-200">
+    <div className="w-full h-full relative group bg-gray-200" style={{minHeight:'100%'}}>
       <div ref={containerRef} className="w-full h-full" />
       
-      {!sdkLoaded && (
+      {!sdkLoaded && !initError && (
          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-10 text-gray-500">
             <div className="text-center">
               <p>Loading Map ({config.type})...</p>
               <p className="text-xs text-gray-400">Waiting for SDK...</p>
             </div>
          </div>
+      )}
+
+      {initError && (
+        <div className="absolute inset-0 flex items-center justify-center bg-white z-20">
+          <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded max-w-sm text-center">
+            <h3 className="font-bold mb-1">Map Initialization Error</h3>
+            <p className="text-xs break-all">{initError}</p>
+            <p className="text-xs mt-2 text-gray-500">Check API Key restrictions in Console.</p>
+          </div>
+        </div>
       )}
 
       {/* Buttons */}
