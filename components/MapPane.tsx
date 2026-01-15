@@ -259,7 +259,6 @@ const MapPane: React.FC<MapPaneProps> = ({
         
         try {
             // 초기 생성 시 현재 지도 좌표로 생성하되, visible 처리는 CSS로 제어
-            // pov, minScale, maxScale 등 필수 옵션 설정
             const pano = new window.naver.maps.Panorama(naverPanoContainerRef.current, {
                 position: new window.naver.maps.LatLng(globalState.lat, globalState.lng),
                 pov: { pan: -135, tilt: 29, fov: 100 },
@@ -284,30 +283,8 @@ const MapPane: React.FC<MapPaneProps> = ({
             console.error("Naver Panorama Init Error", e);
         }
     }
-
-    // Add click listener with explicit ref check for layer state
-    window.naver.maps.Event.addListener(mapRef.current, 'click', (e: any) => {
-      // 거리뷰 레이어가 켜져있을 때만 진입
-      if (isNaverLayerOnRef.current && naverPanoramaRef.current) {
-         const latlng = e.coord;
-         
-         // 1. UI 활성화 (화면에 보이게 함)
-         setIsStreetViewActive(true);
-         
-         // 2. 렌더링 타이밍 보정 (CRITICAL FIX)
-         // DOM이 display block이나 opacity 100이 된 후 resize를 해야 화면이 나옴
-         setTimeout(() => {
-            const pano = naverPanoramaRef.current;
-            if (pano) {
-                // Resize 먼저 트리거하여 캔버스 크기 인식
-                window.naver.maps.Event.trigger(pano, 'resize');
-                
-                // 그 다음 위치 설정 (이 순서가 중요함)
-                pano.setPosition(latlng);
-            }
-         }, 100);
-      }
-    });
+    
+    // NOTE: Click listener is now handled in a separate useEffect for robustness.
   };
 
   // 3. Common Map Listeners
@@ -458,6 +435,42 @@ const MapPane: React.FC<MapPaneProps> = ({
       } catch(e) {}
     }
   }, [searchPos, config.type, sdkLoaded]);
+
+  // -- Naver Street View Click Listener (Advisory Fix) --
+  useEffect(() => {
+    if (config.type === 'naver' && mapRef.current && sdkLoaded) {
+        const map = mapRef.current;
+        
+        // Remove existing listeners if necessary (Naver SDK handles duplicates poorly, but standard addListener returns an object to remove)
+        // Since this effect runs on isNaverLayerOn change, we just add the listener if it is ON.
+        
+        const clickListener = window.naver.maps.Event.addListener(map, 'click', (e: any) => {
+            if (isNaverLayerOn) {
+                const latlng = e.coord;
+                
+                // Show Street View Pane
+                setIsStreetViewActive(true);
+                
+                // Wait for DOM transition/display
+                setTimeout(() => {
+                    const pano = naverPanoramaRef.current;
+                    if (pano) {
+                        // 1. Trigger resize first (crucial for Naver Maps to calc viewport)
+                        window.naver.maps.Event.trigger(pano, 'resize');
+                        
+                        // 2. Set position to the clicked coordinate
+                        pano.setPosition(latlng);
+                    }
+                }, 100);
+            }
+        });
+
+        return () => {
+            window.naver.maps.Event.removeListener(clickListener);
+        };
+    }
+  }, [config.type, sdkLoaded, isNaverLayerOn]);
+
 
   // -- Kakao Measurement Effect --
   useEffect(() => {
@@ -765,10 +778,6 @@ const MapPane: React.FC<MapPaneProps> = ({
             }}
         />
       )}
-
-      <div className="absolute top-2 left-2 pointer-events-none opacity-20 group-hover:opacity-50 transition-opacity z-10">
-        <span className="bg-black text-white px-2 py-1 rounded text-[10px] font-bold uppercase tracking-widest">{side} pane</span>
-      </div>
     </div>
   );
 };
