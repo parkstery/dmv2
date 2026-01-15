@@ -38,9 +38,9 @@ const MapPane: React.FC<MapPaneProps> = ({
   const naverStreetLayerRef = useRef<any>(null);
   const naverPanoramaRef = useRef<any>(null);
   const naverPanoContainerRef = useRef<HTMLDivElement>(null);
+  const naverMarkerRef = useRef<any>(null); // Marker on Mini-map
   const [isNaverLayerOn, setIsNaverLayerOn] = useState(false);
-  const isNaverLayerOnRef = useRef(false); // To keep sync in listeners if needed
-
+  
   // Kakao Refs & Drawing State
   const kakaoGisRef = useRef<{
     rv: any;
@@ -49,7 +49,8 @@ const MapPane: React.FC<MapPaneProps> = ({
     walker: any;
     roadviewLayer: boolean;
     clickHandler?: any; 
-    addressClickListener?: any; // Added to manage cleanup
+    addressClickListener?: any;
+    walkerOverlay?: any; // Walker on Mini-map
   }>({
     rv: null,
     rvClient: null,
@@ -124,23 +125,27 @@ const MapPane: React.FC<MapPaneProps> = ({
     isDragging.current = false;
     isProgrammaticUpdate.current = false;
     setIsNaverLayerOn(false); 
-    isNaverLayerOnRef.current = false;
     setGisMode(GISMode.DEFAULT);
     setIsStreetViewActive(false);
     
-    // Clear Naver Panorama
+    // Clear Naver Resources
     if (config.type !== 'naver') {
-        naverPanoramaRef.current = null;
+        if (naverPanoramaRef.current) naverPanoramaRef.current = null;
+        if (naverMarkerRef.current) { naverMarkerRef.current.setMap(null); naverMarkerRef.current = null; }
         if (naverPanoContainerRef.current) naverPanoContainerRef.current.innerHTML = '';
         if (naverStreetLayerRef.current) naverStreetLayerRef.current = null;
     }
-    // Clear Google Coverage
+    // Clear Google Resources
     if (config.type !== 'google') {
        if (googleCoverageLayerRef.current) googleCoverageLayerRef.current.setMap(null);
     }
-    // Clear Kakao Drawing
+    // Clear Kakao Resources
     if (config.type !== 'kakao') {
       clearKakaoDrawingResources();
+      if (kakaoGisRef.current.walkerOverlay) {
+          kakaoGisRef.current.walkerOverlay.setMap(null);
+          kakaoGisRef.current.walkerOverlay = null;
+      }
     }
   }, [config.type]);
 
@@ -249,42 +254,7 @@ const MapPane: React.FC<MapPaneProps> = ({
     });
     
     naverStreetLayerRef.current = new window.naver.maps.StreetLayer();
-    
     setupMapListeners('naver');
-    
-    // ** Optimized Panorama Initialization **
-    // 1. DOM이 준비되었는지 확인 후 파노라마 생성
-    if (naverPanoContainerRef.current) {
-        naverPanoContainerRef.current.innerHTML = '';
-        
-        try {
-            // 초기 생성 시 현재 지도 좌표로 생성하되, visible 처리는 CSS로 제어
-            const pano = new window.naver.maps.Panorama(naverPanoContainerRef.current, {
-                position: new window.naver.maps.LatLng(globalState.lat, globalState.lng),
-                pov: { pan: -135, tilt: 29, fov: 100 },
-                visible: true,
-                zoomControl: true,
-                minScale: 0,
-                maxScale: 10
-            });
-            naverPanoramaRef.current = pano;
-
-            window.naver.maps.Event.addListener(pano, 'position_changed', () => {
-                const pos = pano.getPosition();
-                // 드래그 중이 아닐 때만 맵 동기화
-                if (!isDragging.current) {
-                  isDragging.current = true;
-                  onStateChange({ lat: pos.lat(), lng: pos.lng(), zoom: mapRef.current.getZoom() });
-                  mapRef.current.setCenter(pos);
-                  setTimeout(() => isDragging.current = false, 200);
-                }
-            });
-        } catch(e) {
-            console.error("Naver Panorama Init Error", e);
-        }
-    }
-    
-    // NOTE: Click listener is now handled in a separate useEffect for robustness.
   };
 
   // 3. Common Map Listeners
@@ -345,14 +315,10 @@ const MapPane: React.FC<MapPaneProps> = ({
 
   // CHANGE: Right click -> Left click for Address
   const setupKakaoAddressClick = () => {
-    // Clean up previous listener if exists
     if (kakaoGisRef.current.addressClickListener) {
         window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.addressClickListener);
     }
-
     const onMapClick = (e: any) => {
-      // *** IMPORTANT: Only run if we are in DEFAULT mode ***
-      // If we are measuring (DISTANCE/AREA) or in ROADVIEW, do not show address.
       if (gisMode !== GISMode.DEFAULT) return;
       if (!kakaoGisRef.current.geocoder) return;
 
@@ -368,12 +334,10 @@ const MapPane: React.FC<MapPaneProps> = ({
         }
       });
     };
-
     kakaoGisRef.current.addressClickListener = onMapClick;
     window.kakao.maps.event.addListener(mapRef.current, 'click', onMapClick);
   };
   
-  // Re-attach address listener when gisMode changes to ensure priority
   useEffect(() => {
     if (config.type === 'kakao' && mapRef.current && sdkLoaded) {
         setupKakaoAddressClick();
@@ -436,36 +400,66 @@ const MapPane: React.FC<MapPaneProps> = ({
     }
   }, [searchPos, config.type, sdkLoaded]);
 
-  // -- Naver Street View Click Listener (Fixed with SDK State Check) --
+  // -- Naver Street View Click Listener & Marker Sync --
   useEffect(() => {
     if (config.type === 'naver' && mapRef.current && sdkLoaded) {
         const map = mapRef.current;
         
-        // ** Key Fix: Use SDK's streetLayer.getMap() to check visibility to avoid stale closure issues **
+        // Listen to map clicks to open Panorama
         const clickListener = window.naver.maps.Event.addListener(map, 'click', (e: any) => {
             const streetLayer = naverStreetLayerRef.current;
             
-            // Check if street layer is active directly from the SDK object
+            // Only proceed if the Street Layer is currently ON
             if (streetLayer && streetLayer.getMap()) {
                 const latlng = e.coord;
                 
-                // 1. Activate UI
+                // Show Panorama UI
                 setIsStreetViewActive(true);
                 
-                // 2. Wait for DOM transition then Resize & Set Position
+                // Init Panorama & Marker
                 setTimeout(() => {
-                    const pano = naverPanoramaRef.current;
                     const container = naverPanoContainerRef.current;
-                    
-                    if (pano && container) {
-                        // Force explicit size update
-                        pano.setSize(new window.naver.maps.Size(container.offsetWidth, container.offsetHeight));
-                        
-                        // Trigger resize event
-                        window.naver.maps.Event.trigger(pano, 'resize');
-                        
-                        // Set position
-                        pano.setPosition(latlng);
+                    if (container) {
+                        // Create or Update Panorama
+                        if (!naverPanoramaRef.current) {
+                            const pano = new window.naver.maps.Panorama(container, {
+                                position: latlng,
+                                pov: { pan: -135, tilt: 29, fov: 100 },
+                                visible: true
+                            });
+                            naverPanoramaRef.current = pano;
+
+                            // Sync Map & Marker when Panorama moves
+                            window.naver.maps.Event.addListener(pano, 'position_changed', () => {
+                                const pos = pano.getPosition();
+                                // Sync Map Center
+                                mapRef.current.setCenter(pos);
+                                // Sync Marker
+                                if (naverMarkerRef.current) {
+                                    naverMarkerRef.current.setPosition(pos);
+                                }
+                            });
+                        } else {
+                            // Just update position and force resize
+                            naverPanoramaRef.current.setPosition(latlng);
+                            window.naver.maps.Event.trigger(naverPanoramaRef.current, 'resize');
+                        }
+
+                        // Create Marker on Map if not exists
+                        if (!naverMarkerRef.current) {
+                            naverMarkerRef.current = new window.naver.maps.Marker({
+                                position: latlng,
+                                map: mapRef.current,
+                                icon: {
+                                    url: 'https://ssl.pstatic.net/static/maps/mantle/1x/marker-default.png',
+                                    size: new window.naver.maps.Size(22, 35),
+                                    anchor: new window.naver.maps.Point(11, 35)
+                                }
+                            });
+                        } else {
+                            naverMarkerRef.current.setMap(mapRef.current);
+                            naverMarkerRef.current.setPosition(latlng);
+                        }
                     }
                 }, 100);
             }
@@ -475,7 +469,7 @@ const MapPane: React.FC<MapPaneProps> = ({
             window.naver.maps.Event.removeListener(clickListener);
         };
     }
-  }, [config.type, sdkLoaded]); // Dependencies simplified as we check layer state inside
+  }, [config.type, sdkLoaded]);
 
 
   // -- Kakao Measurement Effect --
@@ -512,7 +506,6 @@ const MapPane: React.FC<MapPaneProps> = ({
                 currentLine.setPath(path);
             }
 
-            // Create dot and overlay for segment
             const length = Math.round(currentLine.getLength());
             const content = `<div class="measure-label" style="background:white; border:1px solid #333; padding:2px 4px; border-radius:3px; font-size:11px;">${length}m</div>`;
             const overlay = new window.kakao.maps.CustomOverlay({
@@ -520,15 +513,14 @@ const MapPane: React.FC<MapPaneProps> = ({
                 position: pos,
                 content: content,
                 yAnchor: 2,
-                zIndex: 50 // High level
+                zIndex: 50 
             });
             kakaoDrawingRef.current.overlays.push(overlay);
         };
         
-        // ** Right click ends measurement (Requested) **
         const handleRightClick = () => {
             map.setCursor('default');
-            currentLine = null; // End drawing this line
+            currentLine = null; 
         };
 
         window.kakao.maps.event.addListener(map, 'click', handleClick);
@@ -565,7 +557,6 @@ const MapPane: React.FC<MapPaneProps> = ({
             }
         };
         
-        // ** Right click ends measurement (Requested) **
         const handleRightClick = () => {
             if (currentPoly) {
                  const area = Math.round(currentPoly.getArea());
@@ -577,7 +568,7 @@ const MapPane: React.FC<MapPaneProps> = ({
                     position: lastPos,
                     content: content,
                     yAnchor: 2,
-                    zIndex: 50 // High level
+                    zIndex: 50
                  });
                  kakaoDrawingRef.current.overlays.push(overlay);
                  currentPoly = null;
@@ -607,6 +598,10 @@ const MapPane: React.FC<MapPaneProps> = ({
              window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.clickHandler);
              kakaoGisRef.current.clickHandler = null;
          }
+         if (kakaoGisRef.current.walkerOverlay) {
+             kakaoGisRef.current.walkerOverlay.setMap(null);
+             kakaoGisRef.current.walkerOverlay = null;
+         }
      }
      mapRef.current.setCursor('default');
 
@@ -625,12 +620,45 @@ const MapPane: React.FC<MapPaneProps> = ({
                  rv.setPanoId(panoId, pos);
                  kakaoGisRef.current.rv = rv;
 
+                 // Create Walker Overlay on Mini-Map
+                 if (!kakaoGisRef.current.walkerOverlay) {
+                     const content = document.createElement('div');
+                     content.style.width = '26px';
+                     content.style.height = '46px';
+                     content.style.background = 'url(https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/walker.png) no-repeat 0 0';
+                     content.style.backgroundSize = '26px 46px';
+                     
+                     kakaoGisRef.current.walkerOverlay = new window.kakao.maps.CustomOverlay({
+                         position: pos,
+                         content: content,
+                         map: mapRef.current,
+                         yAnchor: 1
+                     });
+                 }
+
                  window.kakao.maps.event.addListener(rv, 'position_changed', () => {
                     const rvPos = rv.getPosition();
                     isDragging.current = true; 
+                    
+                    // Sync Map Center
                     onStateChange({ lat: rvPos.getLat(), lng: rvPos.getLng(), zoom: mapRef.current.getLevel() });
                     mapRef.current.setCenter(rvPos);
+                    
+                    // Sync Walker
+                    if (kakaoGisRef.current.walkerOverlay) {
+                        kakaoGisRef.current.walkerOverlay.setPosition(rvPos);
+                    }
+
                     setTimeout(() => isDragging.current = false, 200);
+                 });
+
+                 // Rotate Walker on Viewpoint Change
+                 window.kakao.maps.event.addListener(rv, 'viewpoint_changed', () => {
+                     const viewpoint = rv.getViewpoint();
+                     if (kakaoGisRef.current.walkerOverlay) {
+                         const content = kakaoGisRef.current.walkerOverlay.getContent();
+                         content.style.transform = `rotate(${viewpoint.pan}deg)`;
+                     }
                  });
                }
              }, 300);
@@ -659,7 +687,6 @@ const MapPane: React.FC<MapPaneProps> = ({
     // Toggle State and Ref for Sync
     const nextState = !isNaverLayerOn;
     setIsNaverLayerOn(nextState);
-    isNaverLayerOnRef.current = nextState;
 
     if (nextState) {
         naverStreetLayerRef.current.setMap(mapRef.current);
@@ -682,7 +709,6 @@ const MapPane: React.FC<MapPaneProps> = ({
     setIsStreetViewActive(false);
     if (config.type === 'google') {
       if (googlePanoInstanceRef.current) googlePanoInstanceRef.current.setVisible(false);
-      // Remove coverage layer from mini map when closing street view
       if (googleCoverageLayerRef.current) googleCoverageLayerRef.current.setMap(null);
     }
     // Fix: Clean up Kakao Roadview overlays/handlers
@@ -693,9 +719,20 @@ const MapPane: React.FC<MapPaneProps> = ({
               window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.clickHandler);
               kakaoGisRef.current.clickHandler = null;
           }
+          if (kakaoGisRef.current.walkerOverlay) {
+              kakaoGisRef.current.walkerOverlay.setMap(null);
+              kakaoGisRef.current.walkerOverlay = null;
+          }
           mapRef.current.setCursor('default');
           setGisMode(GISMode.DEFAULT);
       }
+    }
+    // Fix: Clean up Naver
+    if (config.type === 'naver') {
+        if (naverMarkerRef.current) {
+            naverMarkerRef.current.setMap(null);
+            naverMarkerRef.current = null;
+        }
     }
   };
 
@@ -762,6 +799,7 @@ const MapPane: React.FC<MapPaneProps> = ({
         )}
       </button>
       
+      {/* Repositioned Naver Toggle Button: Left-Top */}
       {config.type === 'naver' && (
         <button 
           onClick={toggleNaverStreetLayer} 
@@ -780,6 +818,10 @@ const MapPane: React.FC<MapPaneProps> = ({
                 mapRef.current.setCursor('default');
               }
               kakaoGisRef.current.roadviewLayer = false;
+              if (kakaoGisRef.current.walkerOverlay) {
+                  kakaoGisRef.current.walkerOverlay.setMap(null);
+                  kakaoGisRef.current.walkerOverlay = null;
+              }
               clearKakaoDrawingResources();
             }}
         />
