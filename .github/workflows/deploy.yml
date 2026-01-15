@@ -6,7 +6,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
 
   return {
-    base: '/REPOSITORY_NAME/',   // ⭐ GitHub Pages 필수
+    base: '/dmv2/',   // ⭐ GitHub Pages 필수
 
     server: {
       port: 3000,
