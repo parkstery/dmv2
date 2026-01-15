@@ -1,0 +1,21 @@
+name: HTML Change Test
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "index.html"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Print changed message
+        run: |
+          echo "index.html 변경 감지됨"
+          date
