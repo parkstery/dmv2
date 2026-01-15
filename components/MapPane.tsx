@@ -40,6 +40,7 @@ const MapPane: React.FC<MapPaneProps> = ({
   const naverPanoContainerRef = useRef<HTMLDivElement>(null);
   const naverMarkerRef = useRef<any>(null); // Marker on Mini-map
   const [isNaverLayerOn, setIsNaverLayerOn] = useState(false);
+  const isNaverLayerOnRef = useRef(false); // Ref for Event Listener access
   
   // Kakao Refs & Drawing State
   const kakaoGisRef = useRef<{
@@ -73,6 +74,11 @@ const MapPane: React.FC<MapPaneProps> = ({
   // Helper: Zoom conversion
   const zoomToKakao = (z: number) => Math.max(1, Math.min(14, 20 - z));
   const kakaoToZoom = (l: number) => Math.max(3, Math.min(20, 20 - l));
+
+  // Sync Ref with State
+  useEffect(() => {
+    isNaverLayerOnRef.current = isNaverLayerOn;
+  }, [isNaverLayerOn]);
 
   // 1. SDK Loading Check & Init
   useEffect(() => {
@@ -308,6 +314,73 @@ const MapPane: React.FC<MapPaneProps> = ({
       };
       window.naver.maps.Event.addListener(mapRef.current, 'center_changed', handleUpdate);
       window.naver.maps.Event.addListener(mapRef.current, 'zoom_changed', handleUpdate);
+
+      // Naver Street Layer Click Listener (Revised)
+      window.naver.maps.Event.addListener(mapRef.current, 'click', (e: any) => {
+        if (isNaverLayerOnRef.current) {  // Check if street layer is active
+            const pos = e.coord;
+            setIsStreetViewActive(true);
+
+            setTimeout(() => {
+                if (naverPanoContainerRef.current) {
+                    // 1. Initialize or Update Panorama
+                    if (!naverPanoramaRef.current) {
+                        const pano = new window.naver.maps.Panorama(naverPanoContainerRef.current, {
+                            position: pos, // Automatically finds nearest pano within 300m
+                            pov: { heading: 0, pitch: 0, fov: 100 },
+                            zoomControl: true,
+                            zoomControlOptions: { position: window.naver.maps.Position.TOP_RIGHT }
+                        });
+                        naverPanoramaRef.current = pano;
+
+                        // Sync Map & Marker when Panorama moves
+                        window.naver.maps.Event.addListener(pano, 'position_changed', () => {
+                            const newPos = pano.getPosition();
+                            isDragging.current = true;
+                            onStateChange({ lat: newPos.lat(), lng: newPos.lng(), zoom: mapRef.current.getZoom() });
+                            mapRef.current.setCenter(newPos);
+                            
+                            // Sync Marker
+                            if (naverMarkerRef.current) {
+                                naverMarkerRef.current.setPosition(newPos);
+                            }
+                            
+                            setTimeout(() => isDragging.current = false, 200);
+                        });
+                    } else {
+                        // Already exists, just update position
+                        naverPanoramaRef.current.setPosition(pos);
+                    }
+
+                    // 2. Handle Marker
+                    if (!naverMarkerRef.current) {
+                        naverMarkerRef.current = new window.naver.maps.Marker({
+                            position: pos,
+                            map: mapRef.current,
+                            icon: {
+                                url: 'https://ssl.pstatic.net/static/maps/mantle/1x/marker-default.png',
+                                size: new window.naver.maps.Size(22, 35),
+                                anchor: new window.naver.maps.Point(11, 35)
+                            }
+                        });
+                    } else {
+                        naverMarkerRef.current.setMap(mapRef.current);
+                        naverMarkerRef.current.setPosition(pos);
+                    }
+
+                    // 3. Check Data Availability
+                    setTimeout(() => {
+                        if (naverPanoramaRef.current) {
+                            if (!naverPanoramaRef.current.getPanoId()) {
+                                console.warn('No panorama available at this location.');
+                                setIsStreetViewActive(false);
+                            }
+                        }
+                    }, 500);
+                }
+            }, 100);
+        }
+      });
     }
   };
 
@@ -342,78 +415,6 @@ const MapPane: React.FC<MapPaneProps> = ({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gisMode, config.type, sdkLoaded]);
-
-
-  // -- Naver Street View Click Listener & Marker Sync --
-  useEffect(() => {
-    if (config.type === 'naver' && mapRef.current && sdkLoaded) {
-        const map = mapRef.current;
-        
-        // Listen to map clicks to open Panorama
-        const clickListener = window.naver.maps.Event.addListener(map, 'click', (e: any) => {
-            const streetLayer = naverStreetLayerRef.current;
-            
-            // Only proceed if the Street Layer is currently ON
-            if (streetLayer && streetLayer.getMap()) {
-                const latlng = e.coord;
-                
-                // Show Panorama UI
-                setIsStreetViewActive(true);
-                
-                // Init Panorama & Marker
-                setTimeout(() => {
-                    const container = naverPanoContainerRef.current;
-                    if (container) {
-                        // Create or Update Panorama
-                        if (!naverPanoramaRef.current) {
-                            const pano = new window.naver.maps.Panorama(container, {
-                                position: latlng,
-                                pov: { pan: -135, tilt: 29, fov: 100 },
-                                visible: true
-                            });
-                            naverPanoramaRef.current = pano;
-
-                            // Sync Map & Marker when Panorama moves
-                            window.naver.maps.Event.addListener(pano, 'position_changed', () => {
-                                const pos = pano.getPosition();
-                                // Sync Map Center
-                                mapRef.current.setCenter(pos);
-                                // Sync Marker
-                                if (naverMarkerRef.current) {
-                                    naverMarkerRef.current.setPosition(pos);
-                                }
-                            });
-                        } else {
-                            // Just update position and force resize
-                            naverPanoramaRef.current.setPosition(latlng);
-                            window.naver.maps.Event.trigger(naverPanoramaRef.current, 'resize');
-                        }
-
-                        // Create Marker on Map if not exists
-                        if (!naverMarkerRef.current) {
-                            naverMarkerRef.current = new window.naver.maps.Marker({
-                                position: latlng,
-                                map: mapRef.current,
-                                icon: {
-                                    url: 'https://ssl.pstatic.net/static/maps/mantle/1x/marker-default.png',
-                                    size: new window.naver.maps.Size(22, 35),
-                                    anchor: new window.naver.maps.Point(11, 35)
-                                }
-                            });
-                        } else {
-                            naverMarkerRef.current.setMap(mapRef.current);
-                            naverMarkerRef.current.setPosition(latlng);
-                        }
-                    }
-                }, 100);
-            }
-        });
-
-        return () => {
-            window.naver.maps.Event.removeListener(clickListener);
-        };
-    }
-  }, [config.type, sdkLoaded]);
 
 
   // -- Kakao Measurement Effect --
@@ -911,11 +912,13 @@ const MapPane: React.FC<MapPaneProps> = ({
       }
     }
     // Fix: Clean up Naver
-    if (config.type === 'naver') {
-        if (naverMarkerRef.current) {
-            naverMarkerRef.current.setMap(null);
-            naverMarkerRef.current = null;
-        }
+    if (config.type === 'naver' && naverPanoramaRef.current) {
+        naverPanoramaRef.current.setVisible(false);
+    }
+    if (config.type === 'naver' && naverMarkerRef.current) {
+        // Optional: Keep marker or remove it? Usually remove when closing SV.
+        naverMarkerRef.current.setMap(null);
+        naverMarkerRef.current = null;
     }
   };
 
