@@ -47,7 +47,7 @@ const MapPane: React.FC<MapPaneProps> = ({
     geocoder: any;
     walker: any;
     roadviewLayer: boolean;
-    clickHandler?: any; // To store and remove click handler
+    clickHandler?: any; 
   }>({
     rv: null,
     rvClient: null,
@@ -104,7 +104,7 @@ const MapPane: React.FC<MapPaneProps> = ({
       if (intervalId) clearInterval(intervalId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.type]); // Re-run when map type changes
+  }, [config.type]);
 
   // ** Reset Refs on Config Change **
   useEffect(() => {
@@ -112,6 +112,13 @@ const MapPane: React.FC<MapPaneProps> = ({
     isProgrammaticUpdate.current = false;
     setIsNaverLayerOn(false); // Reset GIS tools
     setGisMode(GISMode.DEFAULT);
+    
+    // Explicitly clear Naver Panorama ref if switching away from Naver
+    // This ensures a fresh instance when switching back
+    if (config.type !== 'naver') {
+        naverPanoramaRef.current = null;
+        if (naverPanoContainerRef.current) naverPanoContainerRef.current.innerHTML = '';
+    }
   }, [config.type]);
 
 
@@ -131,7 +138,6 @@ const MapPane: React.FC<MapPaneProps> = ({
           window.naver.maps.Event.trigger(mapRef.current, 'resize');
           mapRef.current.setCenter(new window.naver.maps.LatLng(globalState.lat, globalState.lng));
           
-          // CRITICAL: Naver Panorama Resize Trigger
           if (isStreetViewActive && naverPanoramaRef.current) {
              window.naver.maps.Event.trigger(naverPanoramaRef.current, 'resize');
           }
@@ -221,11 +227,14 @@ const MapPane: React.FC<MapPaneProps> = ({
          const latlng = e.coord;
          setIsStreetViewActive(true);
          
-         // Increased timeout to wait for container transition to finish
+         // Use a small delay to allow the container to be rendered with opacity
          setTimeout(() => {
            if (naverPanoContainerRef.current) {
+             // Clean previous instance if necessary or just reuse
              if (!naverPanoramaRef.current) {
-                // 파노라마 초기화
+                // Ensure the container is empty before creating new one
+                naverPanoContainerRef.current.innerHTML = '';
+                
                 naverPanoramaRef.current = new window.naver.maps.Panorama(naverPanoContainerRef.current, {
                   position: latlng,
                   pov: { pan: -135, tilt: 29, fov: 100 },
@@ -233,7 +242,11 @@ const MapPane: React.FC<MapPaneProps> = ({
                   zoomControl: true,
                   minScale: 0, 
                   maxScale: 10,
+                  flightSpot: true
                 });
+                
+                // Force resize right after creation
+                window.naver.maps.Event.trigger(naverPanoramaRef.current, 'resize');
                 
                 window.naver.maps.Event.addListener(naverPanoramaRef.current, 'position_changed', () => {
                    const pos = naverPanoramaRef.current.getPosition();
@@ -244,36 +257,32 @@ const MapPane: React.FC<MapPaneProps> = ({
                 });
              } else {
                naverPanoramaRef.current.setPosition(latlng);
+               // Re-trigger resize just in case
+               window.naver.maps.Event.trigger(naverPanoramaRef.current, 'resize');
              }
            }
-         }, 350); // 350ms to ensure CSS transition (300ms) is complete
+         }, 100); 
       }
     });
   };
 
-  // 3. Common Map Listeners (Robust Sync with Epsilon Check)
+  // 3. Common Map Listeners
   const setupMapListeners = (type: MapVendor) => {
     if (!mapRef.current) return;
 
-    // Helper: Coordinate Epsilon Check to prevent loops
-    // Loop Prevention with higher tolerance (0.00001 ~ 1m)
     const shouldUpdate = (newLat: number, newLng: number, newZoom: number) => {
         if (isProgrammaticUpdate.current) return false;
-        
         const latDiff = Math.abs(newLat - globalState.lat);
         const lngDiff = Math.abs(newLng - globalState.lng);
-        
         if (latDiff < 0.00001 && lngDiff < 0.00001 && newZoom === globalState.zoom) {
             return false;
         }
         return true;
     };
 
-    // --- GOOGLE ---
     if (type === 'google') {
       mapRef.current.addListener('dragstart', () => { isDragging.current = true; });
       mapRef.current.addListener('dragend', () => { isDragging.current = false; });
-      
       const handleUpdate = () => {
         const c = mapRef.current.getCenter();
         const z = mapRef.current.getZoom();
@@ -281,15 +290,12 @@ const MapPane: React.FC<MapPaneProps> = ({
             onStateChange({ lat: c.lat(), lng: c.lng(), zoom: z });
         }
       };
-
       mapRef.current.addListener('center_changed', handleUpdate);
       mapRef.current.addListener('zoom_changed', handleUpdate);
 
-    // --- KAKAO ---
     } else if (type === 'kakao') {
       window.kakao.maps.event.addListener(mapRef.current, 'dragstart', () => { isDragging.current = true; });
       window.kakao.maps.event.addListener(mapRef.current, 'dragend', () => { isDragging.current = false; });
-
       const handleUpdate = () => {
         const c = mapRef.current.getCenter();
         const z = kakaoToZoom(mapRef.current.getLevel());
@@ -297,26 +303,20 @@ const MapPane: React.FC<MapPaneProps> = ({
             onStateChange({ lat: c.getLat(), lng: c.getLng(), zoom: z });
         }
       };
-
       window.kakao.maps.event.addListener(mapRef.current, 'center_changed', handleUpdate);
       window.kakao.maps.event.addListener(mapRef.current, 'zoom_changed', handleUpdate);
 
-    // --- NAVER ---
     } else if (type === 'naver') {
       window.naver.maps.Event.addListener(mapRef.current, 'dragstart', () => { isDragging.current = true; });
       window.naver.maps.Event.addListener(mapRef.current, 'dragend', () => { isDragging.current = false; });
-
       const handleUpdate = () => {
-        // Ensure we don't process updates during programmatic move
         if (isProgrammaticUpdate.current) return;
-
         const c = mapRef.current.getCenter();
         const z = mapRef.current.getZoom();
         if (shouldUpdate(c.lat(), c.lng(), z)) {
             onStateChange({ lat: c.lat(), lng: c.lng(), zoom: z });
         }
       };
-
       window.naver.maps.Event.addListener(mapRef.current, 'center_changed', handleUpdate);
       window.naver.maps.Event.addListener(mapRef.current, 'zoom_changed', handleUpdate);
     }
@@ -339,15 +339,11 @@ const MapPane: React.FC<MapPaneProps> = ({
     });
   };
 
-  // 4. Update Effects (Global State -> Map)
+  // 4. Update Effects
   useEffect(() => {
     if (!mapRef.current) return;
-    
-    // If user is dragging, do not apply external updates to prevent jitter
     if (isDragging.current) return;
-
     isProgrammaticUpdate.current = true;
-
     try {
         if (config.type === 'google') {
           mapRef.current.setCenter({ lat: globalState.lat, lng: globalState.lng });
@@ -363,12 +359,9 @@ const MapPane: React.FC<MapPaneProps> = ({
           mapRef.current.setZoom(globalState.zoom);
         }
     } catch(e) {}
-    
-    // Timeout to allow map to settle and prevent event echo
     setTimeout(() => { isProgrammaticUpdate.current = false; }, 200); 
   }, [globalState.lat, globalState.lng, globalState.zoom, config.type, sdkLoaded]);
 
-  // Type change effect
   useEffect(() => {
     if (!mapRef.current) return;
     try {
@@ -382,14 +375,11 @@ const MapPane: React.FC<MapPaneProps> = ({
     } catch(e) {}
   }, [config.isSatellite, config.type, sdkLoaded]);
 
-  // Marker Update
   useEffect(() => {
     if (!mapRef.current) return;
-    // Marker reset is tricky across vendors, best to create new always
     if (markerRef.current) {
         try { markerRef.current.setMap(null); } catch(e){}
     }
-    
     if (searchPos) {
       try {
           if (config.type === 'google') {
@@ -407,8 +397,6 @@ const MapPane: React.FC<MapPaneProps> = ({
   const handleKakaoAction = useCallback((mode: GISMode) => {
      if (config.type !== 'kakao' || !mapRef.current) return;
      
-     // 이전 모드가 로드뷰였지만, 도로 뷰 오버레이는 유지해야 하므로 여기서 지우지 않음.
-     // 오직 커서와 이벤트 리스너만 정리.
      if (gisMode !== GISMode.ROADVIEW) {
          mapRef.current.setCursor('default');
      }
@@ -439,10 +427,8 @@ const MapPane: React.FC<MapPaneProps> = ({
              }, 300);
            }
          });
-         // Do not remove click listener or reset mode to keep overlay active
        };
        
-       // Remove previous listener if exists to prevent duplicates
        if (kakaoGisRef.current.clickHandler) {
            window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.clickHandler);
        }
@@ -454,138 +440,4 @@ const MapPane: React.FC<MapPaneProps> = ({
   }, [config.type, gisMode]);
 
   const toggleKakaoCadastral = useCallback(() => {
-    if (config.type !== 'kakao' || !mapRef.current) return;
-    const isCadastral = kakaoGisRef.current.roadviewLayer;
-    if (isCadastral) mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.USE_DISTRICT);
-    else mapRef.current.addOverlayMapTypeId(window.kakao.maps.MapTypeId.USE_DISTRICT);
-    kakaoGisRef.current.roadviewLayer = !isCadastral;
-  }, [config.type]);
-
-  const toggleNaverStreetLayer = useCallback(() => {
-    if (!mapRef.current || !naverStreetLayerRef.current) return;
-    if (isNaverLayerOn) {
-        naverStreetLayerRef.current.setMap(null);
-        mapRef.current.setCursor('default');
-    } else {
-        naverStreetLayerRef.current.setMap(mapRef.current);
-        mapRef.current.setCursor('crosshair');
-    }
-    setIsNaverLayerOn(!isNaverLayerOn);
-  }, [isNaverLayerOn]);
-
-  const closeStreetView = () => {
-    setIsStreetViewActive(false);
-    if (config.type === 'google' && googlePanoInstanceRef.current) {
-      googlePanoInstanceRef.current.setVisible(false);
-    }
-    // Fix: 카카오 거리뷰 닫을 때 오버레이 및 리스너 정리
-    if (config.type === 'kakao' && mapRef.current) {
-      if (gisMode === GISMode.ROADVIEW) {
-          mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
-          if (kakaoGisRef.current.clickHandler) {
-              window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.clickHandler);
-              kakaoGisRef.current.clickHandler = null;
-          }
-          mapRef.current.setCursor('default');
-          setGisMode(GISMode.DEFAULT);
-      }
-    }
-  };
-
-  return (
-    <div className="w-full h-full relative group bg-gray-50 overflow-hidden">
-      
-      {/* 
-         LAYOUT:
-         Mini Map: Z-Index 100
-         Street View: Z-Index 10
-      */}
-
-      {/* 1. Main Map / Mini Map Container */}
-      <div 
-        ref={containerRef} 
-        className={`transition-all duration-300 ease-in-out bg-white
-          ${isStreetViewActive 
-            ? 'absolute bottom-3 left-3 w-[240px] h-[240px] z-[100] border-4 border-white shadow-2xl rounded-lg overflow-hidden' 
-            : 'w-full h-full z-0'
-          }`}
-      />
-
-      {/* 2. Street View Containers */}
-      <div 
-        ref={googlePanoRef}
-        className={`absolute inset-0 bg-black transition-opacity duration-300 
-           ${config.type === 'google' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
-      />
-
-      <div 
-        ref={roadviewRef}
-        className={`absolute inset-0 bg-black transition-opacity duration-300 
-           ${config.type === 'kakao' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
-      />
-
-      <div 
-        ref={naverPanoContainerRef}
-        className={`absolute inset-0 bg-black transition-opacity duration-300 
-           ${config.type === 'naver' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
-      />
-
-      {/* 3. Close Button */}
-      {isStreetViewActive && (
-        <button 
-          onClick={closeStreetView}
-          className="absolute top-3 left-1/2 transform -translate-x-1/2 z-[110] bg-red-600 text-white px-4 py-2 rounded-full shadow-lg font-bold hover:bg-red-700 transition-colors"
-        >
-          거리뷰 닫기 ✕
-        </button>
-      )}
-
-      {/* 4. Loading & Controls */}
-      {!sdkLoaded && (
-         <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-[120] text-gray-500">
-            <span>Loading...</span>
-         </div>
-      )}
-
-      <button 
-        onClick={onToggleFullscreen}
-        className="absolute bottom-10 right-3 z-[110] bg-white p-1.5 rounded shadow border border-gray-300 hover:bg-gray-50 transition-colors"
-        title="전체화면"
-      >
-        {isFullscreen ? (
-          <svg viewBox="0 0 24 24" className="w-5 h-5 fill-current text-gray-700"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
-        ) : (
-          <svg viewBox="0 0 24 24" className="w-5 h-5 fill-current text-gray-700"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
-        )}
-      </button>
-      
-      {config.type === 'naver' && (
-        <button 
-          onClick={toggleNaverStreetLayer} 
-          className={`absolute top-3 right-3 z-30 px-2 py-1 rounded shadow border text-xs font-bold transition-colors ${isNaverLayerOn ? 'bg-blue-600 text-white border-blue-700' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
-        >
-          {isNaverLayerOn ? '거리뷰 ON' : '거리뷰'}
-        </button>
-      )}
-      
-      {config.type === 'kakao' && (
-        <KakaoGisToolbar activeMode={gisMode} onAction={handleKakaoAction} onToggleCadastral={toggleKakaoCadastral} onClear={() => {
-              setGisMode(GISMode.DEFAULT);
-              if (mapRef.current) {
-                mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
-                mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.USE_DISTRICT);
-                mapRef.current.setCursor('default');
-              }
-              kakaoGisRef.current.roadviewLayer = false;
-            }}
-        />
-      )}
-
-      <div className="absolute top-2 left-2 pointer-events-none opacity-20 group-hover:opacity-50 transition-opacity z-10">
-        <span className="bg-black text-white px-2 py-1 rounded text-[10px] font-bold uppercase tracking-widest">{side} pane</span>
-      </div>
-    </div>
-  );
-};
-
-export default MapPane;
+    if (config.type

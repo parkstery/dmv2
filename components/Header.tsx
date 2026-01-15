@@ -113,7 +113,7 @@ const Header: React.FC<HeaderProps> = ({
   }, []);
 
   return (
-    <div className="bg-[#222] text-white p-1.5 flex items-center gap-2 shadow-md z-[500] overflow-visible whitespace-nowrap min-h-[46px]">
+    <div className="relative bg-[#222] text-white p-1.5 flex items-center gap-2 shadow-md z-[9999] overflow-visible whitespace-nowrap min-h-[46px]">
       {/* Left Control */}
       <div className="flex items-center gap-1">
         <select 
@@ -155,7 +155,7 @@ const Header: React.FC<HeaderProps> = ({
 
         {/* Suggestions */}
         {suggestions.length > 0 && (
-          <div className="absolute top-full left-0 right-0 bg-white border border-gray-400 shadow-xl max-h-60 overflow-y-auto z-[200] mt-1 rounded text-black text-sm">
+          <div className="absolute top-full left-0 right-0 bg-white border border-gray-400 shadow-xl max-h-60 overflow-y-auto z-[10000] mt-1 rounded text-black text-sm">
             {suggestions.map((item, idx) => (
               <div 
                 key={idx}
@@ -171,7 +171,7 @@ const Header: React.FC<HeaderProps> = ({
 
         {/* History */}
         {showHistory && history.length > 0 && suggestions.length === 0 && (
-          <div className="absolute top-full left-0 w-48 bg-white border border-gray-400 shadow-xl z-[200] mt-1 rounded text-black text-sm">
+          <div className="absolute top-full left-0 w-48 bg-white border border-gray-400 shadow-xl z-[10000] mt-1 rounded text-black text-sm">
             <div className="px-2 py-1 bg-gray-100 text-xs font-bold text-gray-500">최근 검색 기록</div>
             {history.map((item, idx) => (
               <div 
