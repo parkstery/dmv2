@@ -61,19 +61,27 @@ const MapPane: React.FC<MapPaneProps> = ({
   const zoomToKakao = (z: number) => Math.max(1, Math.min(14, 20 - z));
   const kakaoToZoom = (l: number) => Math.max(3, Math.min(20, 20 - l));
 
-  // 1. SDK Loading Check
+  // 1. SDK Loading Check & Init
   useEffect(() => {
     let intervalId: any = null;
     const checkAndInit = () => {
+      // 1. Google
       if (config.type === 'google' && window.google && window.google.maps) {
+        if (containerRef.current) containerRef.current.innerHTML = ''; // Clean Container
         initGoogleMap();
         return true;
       }
+      // 2. Kakao
       if (config.type === 'kakao' && window.kakao && window.kakao.maps) {
-        window.kakao.maps.load(() => initKakaoMap());
+        window.kakao.maps.load(() => {
+          if (containerRef.current) containerRef.current.innerHTML = ''; // Clean Container
+          initKakaoMap();
+        });
         return true;
       }
+      // 3. Naver
       if (config.type === 'naver' && window.naver && window.naver.maps) {
+        if (containerRef.current) containerRef.current.innerHTML = ''; // Clean Container
         initNaverMap();
         return true;
       }
@@ -95,13 +103,14 @@ const MapPane: React.FC<MapPaneProps> = ({
       if (intervalId) clearInterval(intervalId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.type]);
+  }, [config.type]); // Re-run when map type changes
 
-  // ** CRITICAL FIX: Reset Refs on Config Change **
-  // 맵 종류가 바뀔 때 잠금 상태를 강제로 해제하여 동기화 끊김 방지
+  // ** Reset Refs on Config Change **
   useEffect(() => {
     isDragging.current = false;
     isProgrammaticUpdate.current = false;
+    setIsNaverLayerOn(false); // Reset GIS tools
+    setGisMode(GISMode.DEFAULT);
   }, [config.type]);
 
 
@@ -163,7 +172,6 @@ const MapPane: React.FC<MapPaneProps> = ({
           isDragging.current = true; 
           onStateChange({ lat: pos.lat(), lng: pos.lng(), zoom: mapRef.current.getZoom() });
           mapRef.current.setCenter(pos); 
-          // 거리뷰 이동은 사용자 액션으로 간주, 잠시 후 해제
           setTimeout(() => isDragging.current = false, 200);
         }
       }
@@ -236,14 +244,14 @@ const MapPane: React.FC<MapPaneProps> = ({
     if (!mapRef.current) return;
 
     // Helper: Coordinate Epsilon Check to prevent loops
-    // 현재 글로벌 상태와 맵의 상태가 거의 같다면 업데이트를 전파하지 않음
+    // Loop Prevention with higher tolerance (0.00001 ~ 1m)
     const shouldUpdate = (newLat: number, newLng: number, newZoom: number) => {
         if (isProgrammaticUpdate.current) return false;
         
         const latDiff = Math.abs(newLat - globalState.lat);
         const lngDiff = Math.abs(newLng - globalState.lng);
-        // 매우 작은 차이는 무시 (부동소수점 오차 및 루프 방지)
-        if (latDiff < 0.0000001 && lngDiff < 0.0000001 && newZoom === globalState.zoom) {
+        
+        if (latDiff < 0.00001 && lngDiff < 0.00001 && newZoom === globalState.zoom) {
             return false;
         }
         return true;
@@ -287,6 +295,9 @@ const MapPane: React.FC<MapPaneProps> = ({
       window.naver.maps.Event.addListener(mapRef.current, 'dragend', () => { isDragging.current = false; });
 
       const handleUpdate = () => {
+        // Ensure we don't process updates during programmatic move
+        if (isProgrammaticUpdate.current) return;
+
         const c = mapRef.current.getCenter();
         const z = mapRef.current.getZoom();
         if (shouldUpdate(c.lat(), c.lng(), z)) {
@@ -320,7 +331,7 @@ const MapPane: React.FC<MapPaneProps> = ({
   useEffect(() => {
     if (!mapRef.current) return;
     
-    // 내가 드래그 중이면 외부 업데이트 무시 (부드러운 이동)
+    // If user is dragging, do not apply external updates to prevent jitter
     if (isDragging.current) return;
 
     isProgrammaticUpdate.current = true;
@@ -331,8 +342,7 @@ const MapPane: React.FC<MapPaneProps> = ({
           mapRef.current.setZoom(globalState.zoom);
         } else if (config.type === 'kakao') {
           const center = mapRef.current.getCenter();
-          // 카카오의 경우 불필요한 재설정이 깜빡임을 유발할 수 있어 체크
-          if (Math.abs(center.getLat() - globalState.lat) > 0.0000001 || Math.abs(center.getLng() - globalState.lng) > 0.0000001) {
+          if (Math.abs(center.getLat() - globalState.lat) > 0.000001 || Math.abs(center.getLng() - globalState.lng) > 0.000001) {
              mapRef.current.setCenter(new window.kakao.maps.LatLng(globalState.lat, globalState.lng));
           }
           mapRef.current.setLevel(zoomToKakao(globalState.zoom));
@@ -342,7 +352,7 @@ const MapPane: React.FC<MapPaneProps> = ({
         }
     } catch(e) {}
     
-    // 타임아웃을 넉넉히 주어 비동기 이벤트 루프 방지
+    // Timeout to allow map to settle and prevent event echo
     setTimeout(() => { isProgrammaticUpdate.current = false; }, 200); 
   }, [globalState.lat, globalState.lng, globalState.zoom, config.type, sdkLoaded]);
 
@@ -363,7 +373,11 @@ const MapPane: React.FC<MapPaneProps> = ({
   // Marker Update
   useEffect(() => {
     if (!mapRef.current) return;
-    if (markerRef.current) markerRef.current.setMap(null);
+    // Marker reset is tricky across vendors, best to create new always
+    if (markerRef.current) {
+        try { markerRef.current.setMap(null); } catch(e){}
+    }
+    
     if (searchPos) {
       try {
           if (config.type === 'google') {

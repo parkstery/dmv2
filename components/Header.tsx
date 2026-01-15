@@ -23,14 +23,24 @@ const Header: React.FC<HeaderProps> = ({
   const [suggestions, setSuggestions] = useState<SearchResult[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [showHistory, setShowHistory] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(-1);
   const psRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (window.kakao && window.kakao.maps.services) {
-      psRef.current = new window.kakao.maps.services.Places();
+    // Kakao Maps SDK Load & Places Init
+    const initPlaces = () => {
+      if (window.kakao && window.kakao.maps && window.kakao.maps.services) {
+        psRef.current = new window.kakao.maps.services.Places();
+      }
+    };
+
+    if (window.kakao && window.kakao.maps) {
+        // autoload=false이므로 load 호출 필요
+        window.kakao.maps.load(() => {
+            initPlaces();
+        });
     }
+
     const saved = localStorage.getItem('mapSearchHistory');
     if (saved) {
       try {
@@ -77,7 +87,6 @@ const Header: React.FC<HeaderProps> = ({
     setQuery(item.place_name);
     setSuggestions([]);
     saveToHistory(item);
-    setActiveIndex(-1);
   };
 
   const selectHistoryItem = (item: HistoryItem) => {
