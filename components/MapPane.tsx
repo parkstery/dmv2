@@ -22,9 +22,7 @@ const MapPane: React.FC<MapPaneProps> = ({
   const markerRef = useRef<any>(null);
   
   // -- Sync Control Refs --
-  // 사용자가 드래그 중인지 판단 (드래그 중에는 외부 좌표 수신을 무시하여 부드러운 이동 보장)
   const isDragging = useRef(false); 
-  // 코드로 setCenter했을 때 발생하는 이벤트가 다시 상태를 업데이트하는 무한루프 방지
   const isProgrammaticUpdate = useRef(false);
 
   const [sdkLoaded, setSdkLoaded] = useState(false); 
@@ -99,11 +97,18 @@ const MapPane: React.FC<MapPaneProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.type]);
 
+  // ** CRITICAL FIX: Reset Refs on Config Change **
+  // 맵 종류가 바뀔 때 잠금 상태를 강제로 해제하여 동기화 끊김 방지
+  useEffect(() => {
+    isDragging.current = false;
+    isProgrammaticUpdate.current = false;
+  }, [config.type]);
+
+
   // -- Resize Handler for Mini Map Transition --
   useEffect(() => {
     if (!mapRef.current) return;
     
-    // Give time for the div to transition size
     const timer = setTimeout(() => {
       try {
         if (config.type === 'google') {
@@ -141,7 +146,7 @@ const MapPane: React.FC<MapPaneProps> = ({
       zoomControl: true,
       streetViewControl: true, 
       streetView: panorama,
-      gestureHandling: 'greedy' // 부드러운 핸들링
+      gestureHandling: 'greedy'
     });
     
     setupMapListeners('google');
@@ -155,10 +160,11 @@ const MapPane: React.FC<MapPaneProps> = ({
       if (panorama.getVisible()) {
         const pos = panorama.getPosition();
         if (pos) {
-          isDragging.current = true; // 거리뷰 이동 중에도 외부 간섭 방지
+          isDragging.current = true; 
           onStateChange({ lat: pos.lat(), lng: pos.lng(), zoom: mapRef.current.getZoom() });
           mapRef.current.setCenter(pos); 
-          setTimeout(() => isDragging.current = false, 100);
+          // 거리뷰 이동은 사용자 액션으로 간주, 잠시 후 해제
+          setTimeout(() => isDragging.current = false, 200);
         }
       }
     });
@@ -214,7 +220,7 @@ const MapPane: React.FC<MapPaneProps> = ({
                    isDragging.current = true;
                    onStateChange({ lat: pos.lat(), lng: pos.lng(), zoom: mapRef.current.getZoom() });
                    mapRef.current.setCenter(pos);
-                   setTimeout(() => isDragging.current = false, 100);
+                   setTimeout(() => isDragging.current = false, 200);
                 });
              } else {
                naverPanoramaRef.current.setPosition(latlng);
@@ -225,65 +231,71 @@ const MapPane: React.FC<MapPaneProps> = ({
     });
   };
 
-  // 3. Common Map Listeners (Robust Sync)
+  // 3. Common Map Listeners (Robust Sync with Epsilon Check)
   const setupMapListeners = (type: MapVendor) => {
     if (!mapRef.current) return;
 
+    // Helper: Coordinate Epsilon Check to prevent loops
+    // 현재 글로벌 상태와 맵의 상태가 거의 같다면 업데이트를 전파하지 않음
+    const shouldUpdate = (newLat: number, newLng: number, newZoom: number) => {
+        if (isProgrammaticUpdate.current) return false;
+        
+        const latDiff = Math.abs(newLat - globalState.lat);
+        const lngDiff = Math.abs(newLng - globalState.lng);
+        // 매우 작은 차이는 무시 (부동소수점 오차 및 루프 방지)
+        if (latDiff < 0.0000001 && lngDiff < 0.0000001 && newZoom === globalState.zoom) {
+            return false;
+        }
+        return true;
+    };
+
     // --- GOOGLE ---
     if (type === 'google') {
-      // 드래그 상태 감지
       mapRef.current.addListener('dragstart', () => { isDragging.current = true; });
       mapRef.current.addListener('dragend', () => { isDragging.current = false; });
-      mapRef.current.addListener('idle', () => { isDragging.current = false; }); // Safety net
-
-      // 위치 변경 감지
-      mapRef.current.addListener('center_changed', () => {
-        if (isProgrammaticUpdate.current) return; // 코드로 움직인거면 전파 금지
-        
-        const c = mapRef.current.getCenter();
-        onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
-      });
       
-      mapRef.current.addListener('zoom_changed', () => {
-        if (isProgrammaticUpdate.current) return;
+      const handleUpdate = () => {
         const c = mapRef.current.getCenter();
-        onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
-      });
+        const z = mapRef.current.getZoom();
+        if (shouldUpdate(c.lat(), c.lng(), z)) {
+            onStateChange({ lat: c.lat(), lng: c.lng(), zoom: z });
+        }
+      };
+
+      mapRef.current.addListener('center_changed', handleUpdate);
+      mapRef.current.addListener('zoom_changed', handleUpdate);
 
     // --- KAKAO ---
     } else if (type === 'kakao') {
       window.kakao.maps.event.addListener(mapRef.current, 'dragstart', () => { isDragging.current = true; });
       window.kakao.maps.event.addListener(mapRef.current, 'dragend', () => { isDragging.current = false; });
 
-      window.kakao.maps.event.addListener(mapRef.current, 'center_changed', () => {
-        if (isProgrammaticUpdate.current) return;
+      const handleUpdate = () => {
         const c = mapRef.current.getCenter();
-        onStateChange({ lat: c.getLat(), lng: c.getLng(), zoom: kakaoToZoom(mapRef.current.getLevel()) });
-      });
-      
-      window.kakao.maps.event.addListener(mapRef.current, 'zoom_changed', () => {
-        if (isProgrammaticUpdate.current) return;
-        const c = mapRef.current.getCenter();
-        onStateChange({ lat: c.getLat(), lng: c.getLng(), zoom: kakaoToZoom(mapRef.current.getLevel()) });
-      });
+        const z = kakaoToZoom(mapRef.current.getLevel());
+        if (shouldUpdate(c.getLat(), c.getLng(), z)) {
+            onStateChange({ lat: c.getLat(), lng: c.getLng(), zoom: z });
+        }
+      };
+
+      window.kakao.maps.event.addListener(mapRef.current, 'center_changed', handleUpdate);
+      window.kakao.maps.event.addListener(mapRef.current, 'zoom_changed', handleUpdate);
 
     // --- NAVER ---
     } else if (type === 'naver') {
       window.naver.maps.Event.addListener(mapRef.current, 'dragstart', () => { isDragging.current = true; });
       window.naver.maps.Event.addListener(mapRef.current, 'dragend', () => { isDragging.current = false; });
 
-      // FIX: Use center_changed instead of idle for realtime sync
-      window.naver.maps.Event.addListener(mapRef.current, 'center_changed', () => {
-        if (isProgrammaticUpdate.current) return;
+      const handleUpdate = () => {
         const c = mapRef.current.getCenter();
-        onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
-      });
+        const z = mapRef.current.getZoom();
+        if (shouldUpdate(c.lat(), c.lng(), z)) {
+            onStateChange({ lat: c.lat(), lng: c.lng(), zoom: z });
+        }
+      };
 
-      window.naver.maps.Event.addListener(mapRef.current, 'zoom_changed', () => {
-        if (isProgrammaticUpdate.current) return;
-        const c = mapRef.current.getCenter();
-        onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
-      });
+      window.naver.maps.Event.addListener(mapRef.current, 'center_changed', handleUpdate);
+      window.naver.maps.Event.addListener(mapRef.current, 'zoom_changed', handleUpdate);
     }
   };
 
@@ -308,10 +320,9 @@ const MapPane: React.FC<MapPaneProps> = ({
   useEffect(() => {
     if (!mapRef.current) return;
     
-    // FIX: 내가 드래그 중이면(isDragging), 외부 업데이트를 무시해서 네이티브 드래그를 끊지 않음 (구글맵 끊김 해결)
+    // 내가 드래그 중이면 외부 업데이트 무시 (부드러운 이동)
     if (isDragging.current) return;
 
-    // 프로그램에 의한 이동임을 표시하여 Event Listener 루프 방지
     isProgrammaticUpdate.current = true;
 
     try {
@@ -319,21 +330,20 @@ const MapPane: React.FC<MapPaneProps> = ({
           mapRef.current.setCenter({ lat: globalState.lat, lng: globalState.lng });
           mapRef.current.setZoom(globalState.zoom);
         } else if (config.type === 'kakao') {
-          // Kakao check to avoid flicker if already at pos
           const center = mapRef.current.getCenter();
-          if (Math.abs(center.getLat() - globalState.lat) > 0.000001 || Math.abs(center.getLng() - globalState.lng) > 0.000001) {
+          // 카카오의 경우 불필요한 재설정이 깜빡임을 유발할 수 있어 체크
+          if (Math.abs(center.getLat() - globalState.lat) > 0.0000001 || Math.abs(center.getLng() - globalState.lng) > 0.0000001) {
              mapRef.current.setCenter(new window.kakao.maps.LatLng(globalState.lat, globalState.lng));
           }
           mapRef.current.setLevel(zoomToKakao(globalState.zoom));
         } else if (config.type === 'naver') {
-          // Naver
           mapRef.current.setCenter(new window.naver.maps.LatLng(globalState.lat, globalState.lng));
           mapRef.current.setZoom(globalState.zoom);
         }
     } catch(e) {}
     
-    // 이벤트를 무시하는 기간을 짧게 설정 (setCenter는 동기적이거나 매우 빠름)
-    setTimeout(() => { isProgrammaticUpdate.current = false; }, 50); 
+    // 타임아웃을 넉넉히 주어 비동기 이벤트 루프 방지
+    setTimeout(() => { isProgrammaticUpdate.current = false; }, 200); 
   }, [globalState.lat, globalState.lng, globalState.zoom, config.type, sdkLoaded]);
 
   // Type change effect
@@ -393,10 +403,10 @@ const MapPane: React.FC<MapPaneProps> = ({
 
                  window.kakao.maps.event.addListener(rv, 'position_changed', () => {
                     const rvPos = rv.getPosition();
-                    isDragging.current = true; // 거리뷰 이동도 사용자 액션으로 간주
+                    isDragging.current = true; 
                     onStateChange({ lat: rvPos.getLat(), lng: rvPos.getLng(), zoom: mapRef.current.getLevel() });
                     mapRef.current.setCenter(rvPos);
-                    setTimeout(() => isDragging.current = false, 100);
+                    setTimeout(() => isDragging.current = false, 200);
                  });
                }
              }, 300);
@@ -444,7 +454,7 @@ const MapPane: React.FC<MapPaneProps> = ({
       
       {/* 
          LAYOUT:
-         Mini Map: Z-Index 100 (To stay above everything)
+         Mini Map: Z-Index 100
          Street View: Z-Index 10
       */}
 
