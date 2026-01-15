@@ -20,7 +20,13 @@ const MapPane: React.FC<MapPaneProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
-  const isInternalUpdate = useRef(false);
+  
+  // -- Sync Control Refs --
+  // 사용자가 드래그 중인지 판단 (드래그 중에는 외부 좌표 수신을 무시하여 부드러운 이동 보장)
+  const isDragging = useRef(false); 
+  // 코드로 setCenter했을 때 발생하는 이벤트가 다시 상태를 업데이트하는 무한루프 방지
+  const isProgrammaticUpdate = useRef(false);
+
   const [sdkLoaded, setSdkLoaded] = useState(false); 
   
   // -- Street View / Road View States --
@@ -95,7 +101,6 @@ const MapPane: React.FC<MapPaneProps> = ({
 
   // -- Resize Handler for Mini Map Transition --
   useEffect(() => {
-    // When switching between Full Map and Mini Map, trigger resize to center correctly
     if (!mapRef.current) return;
     
     // Give time for the div to transition size
@@ -112,24 +117,22 @@ const MapPane: React.FC<MapPaneProps> = ({
           mapRef.current.setCenter(new window.naver.maps.LatLng(globalState.lat, globalState.lng));
         }
       } catch(e) { console.error(e); }
-    }, 350); // Slightly longer than transition duration (300ms)
+    }, 350); 
     
     return () => clearTimeout(timer);
-  }, [isStreetViewActive, config.type]); // Removed globalState dep to avoid loop on simple move
+  }, [isStreetViewActive, config.type]);
 
 
   // 2. Initialize Maps
   const initGoogleMap = () => {
     if (!containerRef.current || !googlePanoRef.current) return;
     
-    // 1. Init Panorama first (hidden container)
     const panorama = new window.google.maps.StreetViewPanorama(googlePanoRef.current, {
        visible: false,
        enableCloseButton: true
     });
     googlePanoInstanceRef.current = panorama;
 
-    // 2. Init Map linked to that Panorama
     mapRef.current = new window.google.maps.Map(containerRef.current, {
       center: { lat: globalState.lat, lng: globalState.lng },
       zoom: globalState.zoom,
@@ -137,26 +140,25 @@ const MapPane: React.FC<MapPaneProps> = ({
       disableDefaultUI: false,
       zoomControl: true,
       streetViewControl: true, 
-      streetView: panorama 
+      streetView: panorama,
+      gestureHandling: 'greedy' // 부드러운 핸들링
     });
     
     setupMapListeners('google');
 
-    // Google Street View Visibility Listener
     panorama.addListener('visible_changed', () => {
       const isVisible = panorama.getVisible();
       setIsStreetViewActive(isVisible);
     });
 
-    // Google Street View Sync
     panorama.addListener('position_changed', () => {
       if (panorama.getVisible()) {
         const pos = panorama.getPosition();
         if (pos) {
-          // Sync global state -> moves other maps
+          isDragging.current = true; // 거리뷰 이동 중에도 외부 간섭 방지
           onStateChange({ lat: pos.lat(), lng: pos.lng(), zoom: mapRef.current.getZoom() });
-          // Force mini-map to center on current pano location
           mapRef.current.setCenter(pos); 
+          setTimeout(() => isDragging.current = false, 100);
         }
       }
     });
@@ -190,18 +192,15 @@ const MapPane: React.FC<MapPaneProps> = ({
       mapTypeId: config.isSatellite ? window.naver.maps.MapTypeId.SATELLITE : window.naver.maps.MapTypeId.NORMAL
     });
     
-    // Init Street Layer (Blue lines)
     naverStreetLayerRef.current = new window.naver.maps.StreetLayer();
     
     setupMapListeners('naver');
     
-    // Naver Map Click for Panorama
     window.naver.maps.Event.addListener(mapRef.current, 'click', (e: any) => {
       if (naverStreetLayerRef.current?.getMap()) {
          const latlng = e.coord;
-         setIsStreetViewActive(true); // Switch layout to Mini Map
+         setIsStreetViewActive(true);
          
-         // Initialize Panorama if not exists
          setTimeout(() => {
            if (naverPanoContainerRef.current) {
              if (!naverPanoramaRef.current) {
@@ -210,11 +209,12 @@ const MapPane: React.FC<MapPaneProps> = ({
                   pov: { pan: -135, tilt: 29, fov: 100 }
                 });
                 
-                // Sync Logic
                 window.naver.maps.Event.addListener(naverPanoramaRef.current, 'position_changed', () => {
                    const pos = naverPanoramaRef.current.getPosition();
+                   isDragging.current = true;
                    onStateChange({ lat: pos.lat(), lng: pos.lng(), zoom: mapRef.current.getZoom() });
                    mapRef.current.setCenter(pos);
+                   setTimeout(() => isDragging.current = false, 100);
                 });
              } else {
                naverPanoramaRef.current.setPosition(latlng);
@@ -225,35 +225,62 @@ const MapPane: React.FC<MapPaneProps> = ({
     });
   };
 
-  // 3. Common Map Listeners
+  // 3. Common Map Listeners (Robust Sync)
   const setupMapListeners = (type: MapVendor) => {
     if (!mapRef.current) return;
 
+    // --- GOOGLE ---
     if (type === 'google') {
+      // 드래그 상태 감지
+      mapRef.current.addListener('dragstart', () => { isDragging.current = true; });
+      mapRef.current.addListener('dragend', () => { isDragging.current = false; });
+      mapRef.current.addListener('idle', () => { isDragging.current = false; }); // Safety net
+
+      // 위치 변경 감지
       mapRef.current.addListener('center_changed', () => {
-        if (isInternalUpdate.current) return;
+        if (isProgrammaticUpdate.current) return; // 코드로 움직인거면 전파 금지
+        
         const c = mapRef.current.getCenter();
         onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
       });
+      
       mapRef.current.addListener('zoom_changed', () => {
-        if (isInternalUpdate.current) return;
+        if (isProgrammaticUpdate.current) return;
         const c = mapRef.current.getCenter();
         onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
       });
+
+    // --- KAKAO ---
     } else if (type === 'kakao') {
+      window.kakao.maps.event.addListener(mapRef.current, 'dragstart', () => { isDragging.current = true; });
+      window.kakao.maps.event.addListener(mapRef.current, 'dragend', () => { isDragging.current = false; });
+
       window.kakao.maps.event.addListener(mapRef.current, 'center_changed', () => {
-        if (isInternalUpdate.current) return;
+        if (isProgrammaticUpdate.current) return;
         const c = mapRef.current.getCenter();
         onStateChange({ lat: c.getLat(), lng: c.getLng(), zoom: kakaoToZoom(mapRef.current.getLevel()) });
       });
+      
       window.kakao.maps.event.addListener(mapRef.current, 'zoom_changed', () => {
-        if (isInternalUpdate.current) return;
+        if (isProgrammaticUpdate.current) return;
         const c = mapRef.current.getCenter();
         onStateChange({ lat: c.getLat(), lng: c.getLng(), zoom: kakaoToZoom(mapRef.current.getLevel()) });
       });
+
+    // --- NAVER ---
     } else if (type === 'naver') {
-      window.naver.maps.Event.addListener(mapRef.current, 'idle', () => {
-        if (isInternalUpdate.current) return;
+      window.naver.maps.Event.addListener(mapRef.current, 'dragstart', () => { isDragging.current = true; });
+      window.naver.maps.Event.addListener(mapRef.current, 'dragend', () => { isDragging.current = false; });
+
+      // FIX: Use center_changed instead of idle for realtime sync
+      window.naver.maps.Event.addListener(mapRef.current, 'center_changed', () => {
+        if (isProgrammaticUpdate.current) return;
+        const c = mapRef.current.getCenter();
+        onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
+      });
+
+      window.naver.maps.Event.addListener(mapRef.current, 'zoom_changed', () => {
+        if (isProgrammaticUpdate.current) return;
         const c = mapRef.current.getCenter();
         onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
       });
@@ -277,28 +304,39 @@ const MapPane: React.FC<MapPaneProps> = ({
     });
   };
 
-  // 4. Update Effects
-  // CRITICAL FIX: Use setCenter (instant) instead of panTo (animated) to prevent sync lag and loop
+  // 4. Update Effects (Global State -> Map)
   useEffect(() => {
     if (!mapRef.current) return;
-    isInternalUpdate.current = true;
+    
+    // FIX: 내가 드래그 중이면(isDragging), 외부 업데이트를 무시해서 네이티브 드래그를 끊지 않음 (구글맵 끊김 해결)
+    if (isDragging.current) return;
+
+    // 프로그램에 의한 이동임을 표시하여 Event Listener 루프 방지
+    isProgrammaticUpdate.current = true;
+
     try {
         if (config.type === 'google') {
           mapRef.current.setCenter({ lat: globalState.lat, lng: globalState.lng });
           mapRef.current.setZoom(globalState.zoom);
         } else if (config.type === 'kakao') {
-          mapRef.current.setCenter(new window.kakao.maps.LatLng(globalState.lat, globalState.lng));
+          // Kakao check to avoid flicker if already at pos
+          const center = mapRef.current.getCenter();
+          if (Math.abs(center.getLat() - globalState.lat) > 0.000001 || Math.abs(center.getLng() - globalState.lng) > 0.000001) {
+             mapRef.current.setCenter(new window.kakao.maps.LatLng(globalState.lat, globalState.lng));
+          }
           mapRef.current.setLevel(zoomToKakao(globalState.zoom));
         } else if (config.type === 'naver') {
+          // Naver
           mapRef.current.setCenter(new window.naver.maps.LatLng(globalState.lat, globalState.lng));
           mapRef.current.setZoom(globalState.zoom);
         }
     } catch(e) {}
     
-    // Short timeout to allow map to settle before accepting events again
-    setTimeout(() => { isInternalUpdate.current = false; }, 50); 
+    // 이벤트를 무시하는 기간을 짧게 설정 (setCenter는 동기적이거나 매우 빠름)
+    setTimeout(() => { isProgrammaticUpdate.current = false; }, 50); 
   }, [globalState.lat, globalState.lng, globalState.zoom, config.type, sdkLoaded]);
 
+  // Type change effect
   useEffect(() => {
     if (!mapRef.current) return;
     try {
@@ -312,6 +350,7 @@ const MapPane: React.FC<MapPaneProps> = ({
     } catch(e) {}
   }, [config.isSatellite, config.type, sdkLoaded]);
 
+  // Marker Update
   useEffect(() => {
     if (!mapRef.current) return;
     if (markerRef.current) markerRef.current.setMap(null);
@@ -328,9 +367,7 @@ const MapPane: React.FC<MapPaneProps> = ({
     }
   }, [searchPos, config.type, sdkLoaded]);
 
-  // 5. Actions (Kakao GIS & Naver Street)
-  
-  // Kakao Actions
+  // 5. Actions
   const handleKakaoAction = useCallback((mode: GISMode) => {
      if (config.type !== 'kakao' || !mapRef.current) return;
      
@@ -347,18 +384,19 @@ const MapPane: React.FC<MapPaneProps> = ({
          const pos = e.latLng;
          kakaoGisRef.current.rvClient.getNearestPanoId(pos, 50, (panoId: any) => {
            if (panoId) {
-             setIsStreetViewActive(true); // Enable Mini Map Mode
+             setIsStreetViewActive(true); 
              setTimeout(() => {
                if (roadviewRef.current) {
                  const rv = new window.kakao.maps.Roadview(roadviewRef.current);
                  rv.setPanoId(panoId, pos);
                  kakaoGisRef.current.rv = rv;
 
-                 // Sync Logic
                  window.kakao.maps.event.addListener(rv, 'position_changed', () => {
                     const rvPos = rv.getPosition();
+                    isDragging.current = true; // 거리뷰 이동도 사용자 액션으로 간주
                     onStateChange({ lat: rvPos.getLat(), lng: rvPos.getLng(), zoom: mapRef.current.getLevel() });
                     mapRef.current.setCenter(rvPos);
+                    setTimeout(() => isDragging.current = false, 100);
                  });
                }
              }, 300);
@@ -405,12 +443,9 @@ const MapPane: React.FC<MapPaneProps> = ({
     <div className="w-full h-full relative group bg-gray-50 overflow-hidden">
       
       {/* 
-         LAYOUT STRUCTURE:
-         1. Mini Map Container (containerRef) - Z-Index 50 (TOP)
-         2. Street View Containers - Z-Index 10 (BOTTOM)
-         
-         The containerRef is actually the same div used for the Full Map.
-         We just change its class to position it as a mini-map.
+         LAYOUT:
+         Mini Map: Z-Index 100 (To stay above everything)
+         Street View: Z-Index 10
       */}
 
       {/* 1. Main Map / Mini Map Container */}
@@ -418,57 +453,50 @@ const MapPane: React.FC<MapPaneProps> = ({
         ref={containerRef} 
         className={`transition-all duration-300 ease-in-out bg-white
           ${isStreetViewActive 
-            ? 'absolute bottom-3 left-3 w-[240px] h-[240px] z-[50] border-4 border-white shadow-2xl rounded-lg overflow-hidden' 
+            ? 'absolute bottom-3 left-3 w-[240px] h-[240px] z-[100] border-4 border-white shadow-2xl rounded-lg overflow-hidden' 
             : 'w-full h-full z-0'
           }`}
       />
 
-      {/* 2. Street View Containers (Full Screen Backgrounds) */}
-      
-      {/* Google Pano Container */}
+      {/* 2. Street View Containers */}
       <div 
         ref={googlePanoRef}
         className={`absolute inset-0 bg-black transition-opacity duration-300 
            ${config.type === 'google' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
       />
 
-      {/* Kakao Roadview Container */}
       <div 
         ref={roadviewRef}
         className={`absolute inset-0 bg-black transition-opacity duration-300 
            ${config.type === 'kakao' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
       />
 
-      {/* Naver Pano Container */}
       <div 
         ref={naverPanoContainerRef}
         className={`absolute inset-0 bg-black transition-opacity duration-300 
            ${config.type === 'naver' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
       />
 
-
       {/* 3. Close Button */}
       {isStreetViewActive && (
         <button 
           onClick={closeStreetView}
-          className="absolute top-3 left-1/2 transform -translate-x-1/2 z-[60] bg-red-600 text-white px-4 py-2 rounded-full shadow-lg font-bold hover:bg-red-700 transition-colors"
+          className="absolute top-3 left-1/2 transform -translate-x-1/2 z-[110] bg-red-600 text-white px-4 py-2 rounded-full shadow-lg font-bold hover:bg-red-700 transition-colors"
         >
           거리뷰 닫기 ✕
         </button>
       )}
 
-
       {/* 4. Loading & Controls */}
       {!sdkLoaded && (
-         <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-[100] text-gray-500">
+         <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-[120] text-gray-500">
             <span>Loading...</span>
          </div>
       )}
 
-      {/* Fullscreen Button */}
       <button 
         onClick={onToggleFullscreen}
-        className="absolute bottom-10 right-3 z-30 bg-white p-1.5 rounded shadow border border-gray-300 hover:bg-gray-50 transition-colors"
+        className="absolute bottom-10 right-3 z-[110] bg-white p-1.5 rounded shadow border border-gray-300 hover:bg-gray-50 transition-colors"
         title="전체화면"
       >
         {isFullscreen ? (
@@ -478,7 +506,6 @@ const MapPane: React.FC<MapPaneProps> = ({
         )}
       </button>
       
-      {/* Naver Controls */}
       {config.type === 'naver' && (
         <button 
           onClick={toggleNaverStreetLayer} 
@@ -488,7 +515,6 @@ const MapPane: React.FC<MapPaneProps> = ({
         </button>
       )}
       
-      {/* Kakao Controls */}
       {config.type === 'kakao' && (
         <KakaoGisToolbar activeMode={gisMode} onAction={handleKakaoAction} onToggleCadastral={toggleKakaoCadastral} onClear={() => {
               setGisMode(GISMode.DEFAULT);
