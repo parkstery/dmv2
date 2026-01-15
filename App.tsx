@@ -8,7 +8,7 @@ const App: React.FC = () => {
   const [globalState, setGlobalState] = useState<MapState>({
     lat: 37.5665,
     lng: 126.9780,
-    zoom: 13
+    zoom: 17 // 거리뷰 확인을 위해 줌 레벨을 조금 더 확대
   });
 
   const [leftConfig, setLeftConfig] = useState<PaneConfig>({
@@ -24,33 +24,21 @@ const App: React.FC = () => {
   const [searchPos, setSearchPos] = useState<{lat: number, lng: number} | null>(null);
   const [fullscreenPane, setFullscreenPane] = useState<'left' | 'right' | null>(null);
 
-  // Debug Status
-  const [debugInfo, setDebugInfo] = useState<{google:boolean, kakao:boolean, naver:boolean}>({
-    google: false, kakao: false, naver: false
-  });
-
   // Ref to track which pane is currently "driving" the sync
   const activeSyncRef = useRef<'left' | 'right' | null>(null);
 
-  useEffect(() => {
-    const checkSDKs = () => {
-        setDebugInfo({
-            google: !!(window.google && window.google.maps),
-            kakao: !!(window.kakao && window.kakao.maps),
-            naver: !!(window.naver && window.naver.maps)
-        });
-    };
-    const interval = setInterval(checkSDKs, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
   const handleStateChange = useCallback((newState: MapState, source: 'left' | 'right') => {
+    // 동기화 루프 방지: 현재 주도권을 가진 패널만 상태를 변경할 수 있음
     if (activeSyncRef.current === null || activeSyncRef.current === source) {
       activeSyncRef.current = source;
       setGlobalState(newState);
+      
+      // 입력이 멈추면 주도권 해제 (Debounce time 약간 줄임)
       setTimeout(() => {
-        activeSyncRef.current = null;
-      }, 50);
+        if (activeSyncRef.current === source) {
+          activeSyncRef.current = null;
+        }
+      }, 100);
     }
   }, []);
 
@@ -86,23 +74,10 @@ const App: React.FC = () => {
         onClearSearch={clearSearch}
       />
       
-      {/* Debug Overlay - Moved to Top Center for visibility */}
-      <div className="absolute top-[50px] left-1/2 transform -translate-x-1/2 z-[9999] pointer-events-none opacity-80 flex gap-2">
-         <div className={`text-[10px] px-2 py-0.5 rounded ${debugInfo.google ? "bg-green-600 text-white" : "bg-red-600 text-white"}`}>
-           G: {debugInfo.google ? "OK" : "Wait"}
-         </div>
-         <div className={`text-[10px] px-2 py-0.5 rounded ${debugInfo.kakao ? "bg-green-600 text-white" : "bg-red-600 text-white"}`}>
-           K: {debugInfo.kakao ? "OK" : "Wait"}
-         </div>
-         <div className={`text-[10px] px-2 py-0.5 rounded ${debugInfo.naver ? "bg-green-600 text-white" : "bg-red-600 text-white"}`}>
-           N: {debugInfo.naver ? "OK" : "Wait"}
-         </div>
-      </div>
-      
       <div className="flex flex-1 flex-col md:flex-row w-full h-full overflow-hidden relative">
         {/* Left Pane */}
         <div className={`
-          relative transition-all duration-300 ease-in-out border-b md:border-b-0 md:border-r border-gray-600
+          relative transition-all duration-300 ease-in-out border-b md:border-b-0 md:border-r border-gray-400
           ${fullscreenPane === 'right' ? 'hidden' : 'flex-1'}
           ${fullscreenPane === 'left' ? 'h-full w-full' : ''}
         `}>
