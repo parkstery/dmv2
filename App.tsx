@@ -24,8 +24,25 @@ const App: React.FC = () => {
   const [searchPos, setSearchPos] = useState<{lat: number, lng: number} | null>(null);
   const [fullscreenPane, setFullscreenPane] = useState<'left' | 'right' | null>(null);
 
+  // Debug Status
+  const [debugInfo, setDebugInfo] = useState<{google:boolean, kakao:boolean, naver:boolean}>({
+    google: false, kakao: false, naver: false
+  });
+
   // Ref to track which pane is currently "driving" the sync
   const activeSyncRef = useRef<'left' | 'right' | null>(null);
+
+  useEffect(() => {
+    const checkSDKs = () => {
+        setDebugInfo({
+            google: !!(window.google && window.google.maps),
+            kakao: !!(window.kakao && window.kakao.maps),
+            naver: !!(window.naver && window.naver.maps)
+        });
+    };
+    const interval = setInterval(checkSDKs, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleStateChange = useCallback((newState: MapState, source: 'left' | 'right') => {
     if (activeSyncRef.current === null || activeSyncRef.current === source) {
@@ -53,7 +70,6 @@ const App: React.FC = () => {
 
   // Handle Resize on Layout Change
   useEffect(() => {
-    // Trigger window resize event to force maps to check their container size
     setTimeout(() => {
       window.dispatchEvent(new Event('resize'));
     }, 100);
@@ -104,6 +120,14 @@ const App: React.FC = () => {
             onToggleFullscreen={() => toggleFullscreen('right')}
           />
         </div>
+      </div>
+
+      {/* Debug Overlay */}
+      <div className="fixed bottom-0 left-0 bg-black/80 text-white text-[10px] p-1 z-[9999] pointer-events-none opacity-70">
+        <div>SDK Status:</div>
+        <div className={debugInfo.google ? "text-green-400" : "text-red-400"}>Google: {debugInfo.google ? "OK" : "Loading..."}</div>
+        <div className={debugInfo.kakao ? "text-green-400" : "text-red-400"}>Kakao: {debugInfo.kakao ? "OK" : "Loading..."}</div>
+        <div className={debugInfo.naver ? "text-green-400" : "text-red-400"}>Naver: {debugInfo.naver ? "OK" : "Loading..."}</div>
       </div>
     </div>
   );
