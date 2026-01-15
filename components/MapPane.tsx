@@ -22,7 +22,7 @@ const MapPane: React.FC<MapPaneProps> = ({
   const markerRef = useRef<any>(null);
   const isInternalUpdate = useRef(false);
   const [sdkLoaded, setSdkLoaded] = useState(false); 
-  const [initError, setInitError] = useState<string | null>(null); // 화면에 에러 표시용 상태
+  const [initError, setInitError] = useState<string | null>(null);
 
   // Naver Street View Refs
   const naverStreetLayerRef = useRef<any>(null);
@@ -61,46 +61,52 @@ const MapPane: React.FC<MapPaneProps> = ({
   // Initialization Logic
   useEffect(() => {
     let intervalId: any = null;
-    setInitError(null); // Reset error on config change
+    setInitError(null);
 
     const checkAndInit = () => {
-      if (config.type === 'google' && window.google && window.google.maps) {
-        initGoogleMap();
-        return true;
-      }
-      if (config.type === 'kakao' && window.kakao && window.kakao.maps) {
-        // Kakao needs explicit load wait because of autoload=false
-        window.kakao.maps.load(() => {
-          initKakaoMap();
-        });
-        return true;
-      }
-      if (config.type === 'naver' && window.naver && window.naver.maps) {
-        initNaverMap();
-        return true;
+      // Diagnostic logs
+      console.log(`[${side}] Checking SDK for ${config.type}...`);
+
+      if (config.type === 'google') {
+        if (window.google && window.google.maps) {
+          console.log(`[${side}] Google SDK found. Initializing...`);
+          initGoogleMap();
+          return true;
+        }
+      } else if (config.type === 'kakao') {
+        if (window.kakao && window.kakao.maps) {
+          console.log(`[${side}] Kakao SDK found. Loading...`);
+          window.kakao.maps.load(() => {
+            console.log(`[${side}] Kakao load callback fired.`);
+            initKakaoMap();
+          });
+          return true;
+        }
+      } else if (config.type === 'naver') {
+        if (window.naver && window.naver.maps) {
+          console.log(`[${side}] Naver SDK found. Initializing...`);
+          initNaverMap();
+          return true;
+        }
       }
       return false;
     };
 
-    // Try immediately
     if (!checkAndInit()) {
-      // Retry every 200ms if SDK is not ready
       intervalId = setInterval(() => {
         if (checkAndInit()) {
           clearInterval(intervalId);
           setSdkLoaded(true);
         }
-      }, 200);
+      }, 500); // Check every 500ms
     } else {
       setSdkLoaded(true);
     }
 
     return () => {
       if (intervalId) clearInterval(intervalId);
-      if (mapRef.current) {
-        if (config.type === 'naver' && mapRef.current.destroy) {
-           // Naver destroy usually handles itself, keeping careful
-        }
+      if (mapRef.current && config.type === 'naver' && mapRef.current.destroy) {
+          // Naver cleanup
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -118,6 +124,7 @@ const MapPane: React.FC<MapPaneProps> = ({
         zoomControl: true,
       });
       setupMapListeners('google');
+      console.log(`[${side}] Google Map initialized successfully.`);
     } catch (e: any) { 
       console.error("Google Init Error", e); 
       setInitError(`Google Map Error: ${e.message}`);
@@ -136,7 +143,6 @@ const MapPane: React.FC<MapPaneProps> = ({
         mapRef.current.setMapTypeId(window.kakao.maps.MapTypeId.HYBRID);
       }
       
-      // Init GIS tools
       if (window.kakao.maps.services) {
         kakaoGisRef.current.geocoder = new window.kakao.maps.services.Geocoder();
       }
@@ -144,6 +150,7 @@ const MapPane: React.FC<MapPaneProps> = ({
       
       setupMapListeners('kakao');
       setupKakaoRightClick();
+      console.log(`[${side}] Kakao Map initialized successfully.`);
     } catch (e: any) { 
       console.error("Kakao Init Error", e); 
       setInitError(`Kakao Map Error: ${e.message}`);
@@ -159,7 +166,6 @@ const MapPane: React.FC<MapPaneProps> = ({
         mapTypeId: config.isSatellite ? window.naver.maps.MapTypeId.SATELLITE : window.naver.maps.MapTypeId.NORMAL
       });
       
-      // Init Street View
       naverStreetLayerRef.current = new window.naver.maps.StreetLayer();
       naverPanoramaRef.current = new window.naver.maps.Panorama(document.createElement('div'), {
          position: new window.naver.maps.LatLng(globalState.lat, globalState.lng),
@@ -167,6 +173,7 @@ const MapPane: React.FC<MapPaneProps> = ({
       });
 
       setupMapListeners('naver');
+      console.log(`[${side}] Naver Map initialized successfully.`);
     } catch (e: any) { 
       console.error("Naver Init Error", e); 
       setInitError(`Naver Map Error: ${e.message}`);
@@ -224,7 +231,7 @@ const MapPane: React.FC<MapPaneProps> = ({
     });
   };
 
-  // Sync / Resize / Search Effects
+  // Sync / Resize / Search Effects (unchanged)
   useEffect(() => {
     if (!mapRef.current) return;
     const triggerResize = () => {
@@ -292,7 +299,7 @@ const MapPane: React.FC<MapPaneProps> = ({
     }
   }, [searchPos, config.type, sdkLoaded]);
 
-  // GIS Actions (Kakao & Naver Street View)
+  // GIS Actions (unchanged)
   const handleGisAction = useCallback((mode: GISMode) => {
      if (config.type !== 'kakao' || !mapRef.current) return;
      if (gisMode === GISMode.ROADVIEW) {
@@ -342,8 +349,9 @@ const MapPane: React.FC<MapPaneProps> = ({
   }, []);
 
   return (
-    <div className="w-full h-full relative group bg-gray-200" style={{minHeight:'100%'}}>
-      <div ref={containerRef} className="w-full h-full" />
+    <div className="w-full h-full relative group bg-red-100" style={{height:'100%', minHeight:'100%'}}>
+      {/* Container - Explicit height */}
+      <div ref={containerRef} className="w-full h-full" style={{height:'100%'}} />
       
       {!sdkLoaded && !initError && (
          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-10 text-gray-500">

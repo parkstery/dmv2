@@ -76,7 +76,7 @@ const App: React.FC = () => {
   }, [fullscreenPane]);
 
   return (
-    <div className="flex flex-col h-[100dvh] w-screen bg-gray-100 overflow-hidden font-sans">
+    <div className="flex flex-col w-full h-full bg-gray-100 overflow-hidden font-sans">
       <Header 
         leftConfig={leftConfig}
         rightConfig={rightConfig}
@@ -86,7 +86,20 @@ const App: React.FC = () => {
         onClearSearch={clearSearch}
       />
       
-      <div className="flex flex-1 flex-col md:flex-row overflow-hidden relative">
+      {/* Debug Overlay - Moved to Top Center for visibility */}
+      <div className="absolute top-[50px] left-1/2 transform -translate-x-1/2 z-[9999] pointer-events-none opacity-80 flex gap-2">
+         <div className={`text-[10px] px-2 py-0.5 rounded ${debugInfo.google ? "bg-green-600 text-white" : "bg-red-600 text-white"}`}>
+           G: {debugInfo.google ? "OK" : "Wait"}
+         </div>
+         <div className={`text-[10px] px-2 py-0.5 rounded ${debugInfo.kakao ? "bg-green-600 text-white" : "bg-red-600 text-white"}`}>
+           K: {debugInfo.kakao ? "OK" : "Wait"}
+         </div>
+         <div className={`text-[10px] px-2 py-0.5 rounded ${debugInfo.naver ? "bg-green-600 text-white" : "bg-red-600 text-white"}`}>
+           N: {debugInfo.naver ? "OK" : "Wait"}
+         </div>
+      </div>
+      
+      <div className="flex flex-1 flex-col md:flex-row w-full h-full overflow-hidden relative">
         {/* Left Pane */}
         <div className={`
           relative transition-all duration-300 ease-in-out border-b md:border-b-0 md:border-r border-gray-600
@@ -120,14 +133,6 @@ const App: React.FC = () => {
             onToggleFullscreen={() => toggleFullscreen('right')}
           />
         </div>
-      </div>
-
-      {/* Debug Overlay */}
-      <div className="fixed bottom-0 left-0 bg-black/80 text-white text-[10px] p-1 z-[9999] pointer-events-none opacity-70">
-        <div>SDK Status:</div>
-        <div className={debugInfo.google ? "text-green-400" : "text-red-400"}>Google: {debugInfo.google ? "OK" : "Loading..."}</div>
-        <div className={debugInfo.kakao ? "text-green-400" : "text-red-400"}>Kakao: {debugInfo.kakao ? "OK" : "Loading..."}</div>
-        <div className={debugInfo.naver ? "text-green-400" : "text-red-400"}>Naver: {debugInfo.naver ? "OK" : "Loading..."}</div>
       </div>
     </div>
   );
