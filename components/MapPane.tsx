@@ -60,95 +60,125 @@ const MapPane: React.FC<MapPaneProps> = ({
   useEffect(() => {
     if (!containerRef.current) return;
     const el = containerRef.current;
+
+    // Safety check for SDKs
+    if (config.type === 'google' && (!window.google || !window.google.maps)) {
+      console.warn('Google Maps SDK not loaded yet.');
+      return;
+    }
+    if (config.type === 'kakao' && (!window.kakao || !window.kakao.maps)) {
+      console.warn('Kakao Maps SDK not loaded yet.');
+      return;
+    }
+    if (config.type === 'naver' && (!window.naver || !window.naver.maps)) {
+      console.warn('Naver Maps SDK not loaded yet.');
+      return;
+    }
+
     el.innerHTML = '';
 
     if (config.type === 'google') {
-      mapRef.current = new window.google.maps.Map(el, {
-        center: { lat: globalState.lat, lng: globalState.lng },
-        zoom: globalState.zoom,
-        mapTypeId: config.isSatellite ? 'satellite' : 'roadmap',
-        disableDefaultUI: false,
-        zoomControl: true,
-      });
+      try {
+        mapRef.current = new window.google.maps.Map(el, {
+          center: { lat: globalState.lat, lng: globalState.lng },
+          zoom: globalState.zoom,
+          mapTypeId: config.isSatellite ? 'satellite' : 'roadmap',
+          disableDefaultUI: false,
+          zoomControl: true,
+        });
 
-      mapRef.current.addListener('center_changed', () => {
-        if (isInternalUpdate.current) return;
-        const c = mapRef.current.getCenter();
-        onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
-      });
-      mapRef.current.addListener('zoom_changed', () => {
-        if (isInternalUpdate.current) return;
-        const c = mapRef.current.getCenter();
-        onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
-      });
+        mapRef.current.addListener('center_changed', () => {
+          if (isInternalUpdate.current) return;
+          const c = mapRef.current.getCenter();
+          onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
+        });
+        mapRef.current.addListener('zoom_changed', () => {
+          if (isInternalUpdate.current) return;
+          const c = mapRef.current.getCenter();
+          onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
+        });
+      } catch (e) {
+        console.error('Failed to initialize Google Map:', e);
+      }
     } 
     else if (config.type === 'kakao') {
-      const options = {
-        center: new window.kakao.maps.LatLng(globalState.lat, globalState.lng),
-        level: zoomToKakao(globalState.zoom)
-      };
-      mapRef.current = new window.kakao.maps.Map(el, options);
-      
-      if (config.isSatellite) {
-        mapRef.current.setMapTypeId(window.kakao.maps.MapTypeId.HYBRID);
-      }
+      try {
+        const options = {
+          center: new window.kakao.maps.LatLng(globalState.lat, globalState.lng),
+          level: zoomToKakao(globalState.zoom)
+        };
+        mapRef.current = new window.kakao.maps.Map(el, options);
+        
+        if (config.isSatellite) {
+          mapRef.current.setMapTypeId(window.kakao.maps.MapTypeId.HYBRID);
+        }
 
-      window.kakao.maps.event.addListener(mapRef.current, 'center_changed', () => {
-        if (isInternalUpdate.current) return;
-        const c = mapRef.current.getCenter();
-        onStateChange({ lat: c.getLat(), lng: c.getLng(), zoom: kakaoToZoom(mapRef.current.getLevel()) });
-      });
-
-      window.kakao.maps.event.addListener(mapRef.current, 'zoom_changed', () => {
-        if (isInternalUpdate.current) return;
-        const c = mapRef.current.getCenter();
-        onStateChange({ lat: c.getLat(), lng: c.getLng(), zoom: kakaoToZoom(mapRef.current.getLevel()) });
-      });
-
-      // Initialize GIS extras for Kakao
-      kakaoGisRef.current.geocoder = new window.kakao.maps.services.Geocoder();
-      kakaoGisRef.current.rvClient = new window.kakao.maps.RoadviewClient();
-
-      // Right click event
-      window.kakao.maps.event.addListener(mapRef.current, 'rightclick', (e: any) => {
-        const pos = e.latLng;
-        kakaoGisRef.current.geocoder.coord2Address(pos.getLng(), pos.getLat(), (result: any, status: any) => {
-          if (status === window.kakao.maps.services.Status.OK) {
-            const address = result[0].road_address?.address_name || result[0].address?.address_name || '주소없음';
-            const content = `
-              <div class="info-overlay">
-                <div class="font-bold">📍 ${address}</div>
-              </div>`;
-            const overlay = new window.kakao.maps.CustomOverlay({
-              position: pos,
-              content: content,
-              yAnchor: 2.2,
-              map: mapRef.current
-            });
-            setTimeout(() => overlay.setMap(null), 3000);
-          }
+        window.kakao.maps.event.addListener(mapRef.current, 'center_changed', () => {
+          if (isInternalUpdate.current) return;
+          const c = mapRef.current.getCenter();
+          onStateChange({ lat: c.getLat(), lng: c.getLng(), zoom: kakaoToZoom(mapRef.current.getLevel()) });
         });
-      });
+
+        window.kakao.maps.event.addListener(mapRef.current, 'zoom_changed', () => {
+          if (isInternalUpdate.current) return;
+          const c = mapRef.current.getCenter();
+          onStateChange({ lat: c.getLat(), lng: c.getLng(), zoom: kakaoToZoom(mapRef.current.getLevel()) });
+        });
+
+        // Initialize GIS extras for Kakao
+        if (window.kakao.maps.services) {
+            kakaoGisRef.current.geocoder = new window.kakao.maps.services.Geocoder();
+        }
+        kakaoGisRef.current.rvClient = new window.kakao.maps.RoadviewClient();
+
+        // Right click event
+        window.kakao.maps.event.addListener(mapRef.current, 'rightclick', (e: any) => {
+          if (!kakaoGisRef.current.geocoder) return;
+          const pos = e.latLng;
+          kakaoGisRef.current.geocoder.coord2Address(pos.getLng(), pos.getLat(), (result: any, status: any) => {
+            if (status === window.kakao.maps.services.Status.OK) {
+              const address = result[0].road_address?.address_name || result[0].address?.address_name || '주소없음';
+              const content = `
+                <div class="info-overlay">
+                  <div class="font-bold">📍 ${address}</div>
+                </div>`;
+              const overlay = new window.kakao.maps.CustomOverlay({
+                position: pos,
+                content: content,
+                yAnchor: 2.2,
+                map: mapRef.current
+              });
+              setTimeout(() => overlay.setMap(null), 3000);
+            }
+          });
+        });
+      } catch (e) {
+        console.error('Failed to initialize Kakao Map:', e);
+      }
     }
     else if (config.type === 'naver') {
-      mapRef.current = new window.naver.maps.Map(el, {
-        center: new window.naver.maps.LatLng(globalState.lat, globalState.lng),
-        zoom: globalState.zoom,
-        mapTypeId: config.isSatellite ? window.naver.maps.MapTypeId.SATELLITE : window.naver.maps.MapTypeId.NORMAL
-      });
+      try {
+        mapRef.current = new window.naver.maps.Map(el, {
+          center: new window.naver.maps.LatLng(globalState.lat, globalState.lng),
+          zoom: globalState.zoom,
+          mapTypeId: config.isSatellite ? window.naver.maps.MapTypeId.SATELLITE : window.naver.maps.MapTypeId.NORMAL
+        });
 
-      window.naver.maps.Event.addListener(mapRef.current, 'idle', () => {
-        if (isInternalUpdate.current) return;
-        const c = mapRef.current.getCenter();
-        onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
-      });
+        window.naver.maps.Event.addListener(mapRef.current, 'idle', () => {
+          if (isInternalUpdate.current) return;
+          const c = mapRef.current.getCenter();
+          onStateChange({ lat: c.lat(), lng: c.lng(), zoom: mapRef.current.getZoom() });
+        });
 
-      // Prepare Street View objects
-      naverStreetLayerRef.current = new window.naver.maps.StreetLayer();
-      naverPanoramaRef.current = new window.naver.maps.Panorama(document.createElement('div'), {
-        position: new window.naver.maps.LatLng(globalState.lat, globalState.lng),
-        visible: false
-      });
+        // Prepare Street View objects
+        naverStreetLayerRef.current = new window.naver.maps.StreetLayer();
+        naverPanoramaRef.current = new window.naver.maps.Panorama(document.createElement('div'), {
+          position: new window.naver.maps.LatLng(globalState.lat, globalState.lng),
+          visible: false
+        });
+      } catch (e) {
+         console.error('Failed to initialize Naver Map:', e);
+      }
     }
 
     return () => {
@@ -162,19 +192,22 @@ const MapPane: React.FC<MapPaneProps> = ({
   useEffect(() => {
     if (!mapRef.current) return;
     const triggerResize = () => {
-      if (config.type === 'kakao') {
-        mapRef.current.relayout();
-        mapRef.current.setCenter(new window.kakao.maps.LatLng(globalState.lat, globalState.lng));
-      } else if (config.type === 'google') {
-        window.google.maps.event.trigger(mapRef.current, 'resize');
-        mapRef.current.setCenter({ lat: globalState.lat, lng: globalState.lng });
-      } else if (config.type === 'naver') {
-        window.naver.maps.Event.trigger(mapRef.current, 'resize');
-        const center = new window.naver.maps.LatLng(globalState.lat, globalState.lng);
-        mapRef.current.setCenter(center);
+      try {
+          if (config.type === 'kakao' && mapRef.current) {
+            mapRef.current.relayout();
+            mapRef.current.setCenter(new window.kakao.maps.LatLng(globalState.lat, globalState.lng));
+          } else if (config.type === 'google' && mapRef.current) {
+            window.google.maps.event.trigger(mapRef.current, 'resize');
+            mapRef.current.setCenter({ lat: globalState.lat, lng: globalState.lng });
+          } else if (config.type === 'naver' && mapRef.current) {
+            window.naver.maps.Event.trigger(mapRef.current, 'resize');
+            const center = new window.naver.maps.LatLng(globalState.lat, globalState.lng);
+            mapRef.current.setCenter(center);
+          }
+      } catch (e) {
+          console.warn('Resize trigger failed:', e);
       }
     };
-    // Delay slightly to ensure DOM update is complete
     setTimeout(triggerResize, 100);
     setTimeout(triggerResize, 500);
   }, [isFullscreen, config.type]);
@@ -184,15 +217,19 @@ const MapPane: React.FC<MapPaneProps> = ({
     if (!mapRef.current) return;
     isInternalUpdate.current = true;
 
-    if (config.type === 'google') {
-      mapRef.current.setCenter({ lat: globalState.lat, lng: globalState.lng });
-      mapRef.current.setZoom(globalState.zoom);
-    } else if (config.type === 'kakao') {
-      mapRef.current.setCenter(new window.kakao.maps.LatLng(globalState.lat, globalState.lng));
-      mapRef.current.setLevel(zoomToKakao(globalState.zoom));
-    } else if (config.type === 'naver') {
-      mapRef.current.setCenter(new window.naver.maps.LatLng(globalState.lat, globalState.lng));
-      mapRef.current.setZoom(globalState.zoom);
+    try {
+        if (config.type === 'google') {
+          mapRef.current.setCenter({ lat: globalState.lat, lng: globalState.lng });
+          mapRef.current.setZoom(globalState.zoom);
+        } else if (config.type === 'kakao') {
+          mapRef.current.setCenter(new window.kakao.maps.LatLng(globalState.lat, globalState.lng));
+          mapRef.current.setLevel(zoomToKakao(globalState.zoom));
+        } else if (config.type === 'naver') {
+          mapRef.current.setCenter(new window.naver.maps.LatLng(globalState.lat, globalState.lng));
+          mapRef.current.setZoom(globalState.zoom);
+        }
+    } catch(e) {
+        // Ignore sync errors if map is not ready
     }
 
     setTimeout(() => { isInternalUpdate.current = false; }, 100);
@@ -201,13 +238,15 @@ const MapPane: React.FC<MapPaneProps> = ({
   // Sync satellite toggle
   useEffect(() => {
     if (!mapRef.current) return;
-    if (config.type === 'google') {
-      mapRef.current.setMapTypeId(config.isSatellite ? 'satellite' : 'roadmap');
-    } else if (config.type === 'kakao') {
-      mapRef.current.setMapTypeId(config.isSatellite ? window.kakao.maps.MapTypeId.HYBRID : window.kakao.maps.MapTypeId.ROADMAP);
-    } else if (config.type === 'naver') {
-      mapRef.current.setMapTypeId(config.isSatellite ? window.naver.maps.MapTypeId.SATELLITE : window.naver.maps.MapTypeId.NORMAL);
-    }
+    try {
+        if (config.type === 'google') {
+          mapRef.current.setMapTypeId(config.isSatellite ? 'satellite' : 'roadmap');
+        } else if (config.type === 'kakao') {
+          mapRef.current.setMapTypeId(config.isSatellite ? window.kakao.maps.MapTypeId.HYBRID : window.kakao.maps.MapTypeId.ROADMAP);
+        } else if (config.type === 'naver') {
+          mapRef.current.setMapTypeId(config.isSatellite ? window.naver.maps.MapTypeId.SATELLITE : window.naver.maps.MapTypeId.NORMAL);
+        }
+    } catch(e) {}
   }, [config.isSatellite, config.type]);
 
   // Handle Search Marker
@@ -216,22 +255,24 @@ const MapPane: React.FC<MapPaneProps> = ({
     if (markerRef.current) markerRef.current.setMap(null);
 
     if (searchPos) {
-      if (config.type === 'google') {
-        markerRef.current = new window.google.maps.Marker({
-          position: searchPos,
-          map: mapRef.current,
-        });
-      } else if (config.type === 'kakao') {
-        markerRef.current = new window.kakao.maps.Marker({
-          position: new window.kakao.maps.LatLng(searchPos.lat, searchPos.lng),
-          map: mapRef.current,
-        });
-      } else if (config.type === 'naver') {
-        markerRef.current = new window.naver.maps.Marker({
-          position: new window.naver.maps.LatLng(searchPos.lat, searchPos.lng),
-          map: mapRef.current,
-        });
-      }
+      try {
+          if (config.type === 'google') {
+            markerRef.current = new window.google.maps.Marker({
+              position: searchPos,
+              map: mapRef.current,
+            });
+          } else if (config.type === 'kakao') {
+            markerRef.current = new window.kakao.maps.Marker({
+              position: new window.kakao.maps.LatLng(searchPos.lat, searchPos.lng),
+              map: mapRef.current,
+            });
+          } else if (config.type === 'naver') {
+            markerRef.current = new window.naver.maps.Marker({
+              position: new window.naver.maps.LatLng(searchPos.lat, searchPos.lng),
+              map: mapRef.current,
+            });
+          }
+      } catch(e) {}
     }
   }, [searchPos, config.type]);
 
@@ -239,7 +280,6 @@ const MapPane: React.FC<MapPaneProps> = ({
   const handleGisAction = useCallback((mode: GISMode) => {
     if (config.type !== 'kakao' || !mapRef.current) return;
 
-    // Reset previous behaviors
     if (gisMode === GISMode.ROADVIEW) {
       mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
       mapRef.current.setCursor('default');
@@ -286,9 +326,8 @@ const MapPane: React.FC<MapPaneProps> = ({
     kakaoGisRef.current.roadviewLayer = !isCadastral;
   }, [config.type]);
 
-  // Naver Street View Handler
   const toggleNaverStreet = useCallback(() => {
-    if (!mapRef.current) return;
+    if (!mapRef.current || !naverStreetLayerRef.current) return;
     const layer = naverStreetLayerRef.current;
     if (layer.getMap()) {
       layer.setMap(null);
