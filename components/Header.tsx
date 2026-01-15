@@ -57,8 +57,8 @@ const Header: React.FC<HeaderProps> = ({
       lat: parseFloat(item.y), 
       lng: parseFloat(item.x) 
     };
-    // Remove duplicates and keep top 10
-    const newHistory = [newItem, ...history.filter(h => h.name !== newItem.name)].slice(0, 10);
+    // Remove duplicates and keep top 5 (Changed from 10)
+    const newHistory = [newItem, ...history.filter(h => h.name !== newItem.name)].slice(0, 5);
     setHistory(newHistory);
     localStorage.setItem('mapSearchHistory', JSON.stringify(newHistory));
   };

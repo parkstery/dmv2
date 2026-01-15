@@ -39,7 +39,7 @@ const MapPane: React.FC<MapPaneProps> = ({
   const naverPanoramaRef = useRef<any>(null);
   const naverPanoContainerRef = useRef<HTMLDivElement>(null);
   const [isNaverLayerOn, setIsNaverLayerOn] = useState(false);
-  const isNaverLayerOnRef = useRef(false);
+  const isNaverLayerOnRef = useRef(false); // To keep sync in listeners if needed
 
   // Kakao Refs & Drawing State
   const kakaoGisRef = useRef<{
@@ -436,29 +436,35 @@ const MapPane: React.FC<MapPaneProps> = ({
     }
   }, [searchPos, config.type, sdkLoaded]);
 
-  // -- Naver Street View Click Listener (Advisory Fix) --
+  // -- Naver Street View Click Listener (Fixed with SDK State Check) --
   useEffect(() => {
     if (config.type === 'naver' && mapRef.current && sdkLoaded) {
         const map = mapRef.current;
         
-        // Remove existing listeners if necessary (Naver SDK handles duplicates poorly, but standard addListener returns an object to remove)
-        // Since this effect runs on isNaverLayerOn change, we just add the listener if it is ON.
-        
+        // ** Key Fix: Use SDK's streetLayer.getMap() to check visibility to avoid stale closure issues **
         const clickListener = window.naver.maps.Event.addListener(map, 'click', (e: any) => {
-            if (isNaverLayerOn) {
+            const streetLayer = naverStreetLayerRef.current;
+            
+            // Check if street layer is active directly from the SDK object
+            if (streetLayer && streetLayer.getMap()) {
                 const latlng = e.coord;
                 
-                // Show Street View Pane
+                // 1. Activate UI
                 setIsStreetViewActive(true);
                 
-                // Wait for DOM transition/display
+                // 2. Wait for DOM transition then Resize & Set Position
                 setTimeout(() => {
                     const pano = naverPanoramaRef.current;
-                    if (pano) {
-                        // 1. Trigger resize first (crucial for Naver Maps to calc viewport)
+                    const container = naverPanoContainerRef.current;
+                    
+                    if (pano && container) {
+                        // Force explicit size update
+                        pano.setSize(new window.naver.maps.Size(container.offsetWidth, container.offsetHeight));
+                        
+                        // Trigger resize event
                         window.naver.maps.Event.trigger(pano, 'resize');
                         
-                        // 2. Set position to the clicked coordinate
+                        // Set position
                         pano.setPosition(latlng);
                     }
                 }, 100);
@@ -469,7 +475,7 @@ const MapPane: React.FC<MapPaneProps> = ({
             window.naver.maps.Event.removeListener(clickListener);
         };
     }
-  }, [config.type, sdkLoaded, isNaverLayerOn]);
+  }, [config.type, sdkLoaded]); // Dependencies simplified as we check layer state inside
 
 
   // -- Kakao Measurement Effect --
@@ -759,7 +765,7 @@ const MapPane: React.FC<MapPaneProps> = ({
       {config.type === 'naver' && (
         <button 
           onClick={toggleNaverStreetLayer} 
-          className={`absolute top-3 right-3 z-30 px-2 py-1 rounded shadow border text-xs font-bold transition-colors ${isNaverLayerOn ? 'bg-blue-600 text-white border-blue-700' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+          className={`absolute top-4 left-4 z-[110] px-2 py-1 rounded shadow border text-xs font-bold transition-colors ${isNaverLayerOn ? 'bg-blue-600 text-white border-blue-700' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
         >
           {isNaverLayerOn ? '거리뷰 ON' : '거리뷰'}
         </button>
