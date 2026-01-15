@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { MapVendor, MapState, PaneConfig, GISMode } from '../types';
 import KakaoGisToolbar from './KakaoGisToolbar';
@@ -33,6 +32,7 @@ const MapPane: React.FC<MapPaneProps> = ({
   // Google Refs
   const googlePanoRef = useRef<HTMLDivElement>(null);
   const googlePanoInstanceRef = useRef<any>(null);
+  const googleCoverageLayerRef = useRef<any>(null); // To maintain road layer on minimap
 
   // Naver Refs
   const naverStreetLayerRef = useRef<any>(null);
@@ -112,12 +112,17 @@ const MapPane: React.FC<MapPaneProps> = ({
     isProgrammaticUpdate.current = false;
     setIsNaverLayerOn(false); // Reset GIS tools
     setGisMode(GISMode.DEFAULT);
+    setIsStreetViewActive(false); // Close street view when map type changes
     
     // Explicitly clear Naver Panorama ref if switching away from Naver
-    // This ensures a fresh instance when switching back
     if (config.type !== 'naver') {
         naverPanoramaRef.current = null;
         if (naverPanoContainerRef.current) naverPanoContainerRef.current.innerHTML = '';
+        if (naverStreetLayerRef.current) naverStreetLayerRef.current = null;
+    }
+    // Clear Google Coverage Layer
+    if (config.type !== 'google') {
+       if (googleCoverageLayerRef.current) googleCoverageLayerRef.current.setMap(null);
     }
   }, [config.type]);
 
@@ -155,9 +160,10 @@ const MapPane: React.FC<MapPaneProps> = ({
     
     const panorama = new window.google.maps.StreetViewPanorama(googlePanoRef.current, {
        visible: false,
-       enableCloseButton: true
+       enableCloseButton: false, // We use our own close button
     });
     googlePanoInstanceRef.current = panorama;
+    googleCoverageLayerRef.current = new window.google.maps.StreetViewCoverageLayer();
 
     mapRef.current = new window.google.maps.Map(containerRef.current, {
       center: { lat: globalState.lat, lng: globalState.lng },
@@ -165,7 +171,8 @@ const MapPane: React.FC<MapPaneProps> = ({
       mapTypeId: config.isSatellite ? 'satellite' : 'roadmap',
       disableDefaultUI: false,
       zoomControl: true,
-      streetViewControl: true, 
+      streetViewControl: true,
+      fullscreenControl: false, // Remove default fullscreen control
       streetView: panorama,
       gestureHandling: 'greedy'
     });
@@ -175,6 +182,13 @@ const MapPane: React.FC<MapPaneProps> = ({
     panorama.addListener('visible_changed', () => {
       const isVisible = panorama.getVisible();
       setIsStreetViewActive(isVisible);
+      
+      // Toggle coverage layer on mini-map
+      if (isVisible) {
+        googleCoverageLayerRef.current.setMap(mapRef.current);
+      } else {
+        googleCoverageLayerRef.current.setMap(null);
+      }
     });
 
     panorama.addListener('position_changed', () => {
@@ -227,14 +241,14 @@ const MapPane: React.FC<MapPaneProps> = ({
          const latlng = e.coord;
          setIsStreetViewActive(true);
          
-         // Use a small delay to allow the container to be rendered with opacity
+         // Increased delay to 400ms to ensure the container transition (300ms) has fully finished
+         // and the container has a non-zero size.
          setTimeout(() => {
            if (naverPanoContainerRef.current) {
-             // Always recreate panorama to fix visibility issues
-             // Clear previous content
              naverPanoContainerRef.current.innerHTML = '';
              
              try {
+                // Ensure the container is visible to the DOM before init
                 naverPanoramaRef.current = new window.naver.maps.Panorama(naverPanoContainerRef.current, {
                   position: latlng,
                   pov: { pan: -135, tilt: 29, fov: 100 },
@@ -245,9 +259,13 @@ const MapPane: React.FC<MapPaneProps> = ({
                   flightSpot: true
                 });
                 
-                // Force resize right after creation
-                window.naver.maps.Event.trigger(naverPanoramaRef.current, 'resize');
-                
+                // Force a resize event after a short tick to fix white screen issues
+                setTimeout(() => {
+                    if (naverPanoramaRef.current) {
+                        window.naver.maps.Event.trigger(naverPanoramaRef.current, 'resize');
+                    }
+                }, 50);
+
                 window.naver.maps.Event.addListener(naverPanoramaRef.current, 'position_changed', () => {
                    const pos = naverPanoramaRef.current.getPosition();
                    isDragging.current = true;
@@ -259,7 +277,7 @@ const MapPane: React.FC<MapPaneProps> = ({
                  console.error("Naver Panorama Creation Failed", err);
              }
            }
-         }, 100); 
+         }, 400); 
       }
     });
   };
@@ -395,8 +413,6 @@ const MapPane: React.FC<MapPaneProps> = ({
   const handleKakaoAction = useCallback((mode: GISMode) => {
      if (config.type !== 'kakao' || !mapRef.current) return;
      
-     // 이전 모드가 로드뷰였더라도, 오버레이는 유지해야 하므로 여기서 지우지 않음.
-     // 커서만 리셋 (로드뷰가 아닐 경우)
      if (gisMode !== GISMode.ROADVIEW) {
          mapRef.current.setCursor('default');
      }
@@ -429,7 +445,6 @@ const MapPane: React.FC<MapPaneProps> = ({
          });
        };
        
-       // Remove previous listener if exists to prevent duplicates
        if (kakaoGisRef.current.clickHandler) {
            window.kakao.maps.event.removeListener(mapRef.current, 'click', kakaoGisRef.current.clickHandler);
        }
@@ -462,10 +477,12 @@ const MapPane: React.FC<MapPaneProps> = ({
 
   const closeStreetView = () => {
     setIsStreetViewActive(false);
-    if (config.type === 'google' && googlePanoInstanceRef.current) {
-      googlePanoInstanceRef.current.setVisible(false);
+    if (config.type === 'google') {
+      if (googlePanoInstanceRef.current) googlePanoInstanceRef.current.setVisible(false);
+      // Remove coverage layer from mini map when closing street view
+      if (googleCoverageLayerRef.current) googleCoverageLayerRef.current.setMap(null);
     }
-    // Fix: 카카오 거리뷰 닫을 때 오버레이 및 리스너 정리
+    // Fix: Clean up Kakao Roadview overlays/handlers
     if (config.type === 'kakao' && mapRef.current) {
       if (gisMode === GISMode.ROADVIEW) {
           mapRef.current.removeOverlayMapTypeId(window.kakao.maps.MapTypeId.ROADVIEW);
@@ -481,13 +498,6 @@ const MapPane: React.FC<MapPaneProps> = ({
 
   return (
     <div className="w-full h-full relative group bg-gray-50 overflow-hidden">
-      
-      {/* 
-         LAYOUT:
-         Mini Map: Z-Index 100
-         Street View: Z-Index 10
-      */}
-
       {/* 1. Main Map / Mini Map Container */}
       <div 
         ref={containerRef} 
@@ -517,13 +527,16 @@ const MapPane: React.FC<MapPaneProps> = ({
            ${config.type === 'naver' && isStreetViewActive ? 'z-10 opacity-100 pointer-events-auto' : 'z-[-1] opacity-0 pointer-events-none'}`} 
       />
 
-      {/* 3. Close Button */}
+      {/* 3. Close Button (Square Icon) */}
       {isStreetViewActive && (
         <button 
           onClick={closeStreetView}
-          className="absolute top-3 left-1/2 transform -translate-x-1/2 z-[110] bg-red-600 text-white px-4 py-2 rounded-full shadow-lg font-bold hover:bg-red-700 transition-colors"
+          className="absolute top-4 right-4 z-[110] bg-white text-gray-800 w-10 h-10 flex items-center justify-center shadow-lg rounded-sm hover:bg-gray-100 transition-colors border border-gray-300"
+          title="거리뷰 닫기"
         >
-          거리뷰 닫기 ✕
+          <svg viewBox="0 0 24 24" className="w-6 h-6 fill-current">
+            <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+          </svg>
         </button>
       )}
 

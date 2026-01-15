@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { MapVendor, PaneConfig, SearchResult, HistoryItem } from '../types';
 
@@ -41,6 +40,7 @@ const Header: React.FC<HeaderProps> = ({
         });
     }
 
+    // Load History
     const saved = localStorage.getItem('mapSearchHistory');
     if (saved) {
       try {
@@ -57,6 +57,7 @@ const Header: React.FC<HeaderProps> = ({
       lat: parseFloat(item.y), 
       lng: parseFloat(item.x) 
     };
+    // Remove duplicates and keep top 10
     const newHistory = [newItem, ...history.filter(h => h.name !== newItem.name)].slice(0, 10);
     setHistory(newHistory);
     localStorage.setItem('mapSearchHistory', JSON.stringify(newHistory));
@@ -65,11 +66,12 @@ const Header: React.FC<HeaderProps> = ({
   const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setQuery(val);
-    setShowHistory(false);
     if (!val.trim()) {
       setSuggestions([]);
+      setShowHistory(true); // Show history when input is cleared
       return;
     }
+    setShowHistory(false); // Hide history when typing
 
     if (psRef.current) {
       psRef.current.keywordSearch(val, (data: any, status: any) => {
@@ -146,7 +148,12 @@ const Header: React.FC<HeaderProps> = ({
           className="bg-white text-black text-sm px-2 py-1 rounded w-full h-[28px] outline-none border border-gray-300 focus:border-blue-500"
         />
         <button 
-          onClick={() => { setQuery(''); onClearSearch(); setSuggestions([]); }}
+          onClick={() => { 
+             setQuery(''); 
+             onClearSearch(); 
+             setSuggestions([]); 
+             setShowHistory(true); // Show history when cleared
+          }}
           className="h-[28px] w-[28px] bg-white border border-gray-300 rounded flex items-center justify-center text-gray-600 hover:bg-gray-100"
           title="지우기"
         >
